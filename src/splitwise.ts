@@ -3,6 +3,7 @@ import { FxConverter } from './fx.js';
 import { Transaction } from './types.js';
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
+import Papa from 'papaparse';
 
 interface SplitwiseUser {
   id: number;
@@ -306,29 +307,55 @@ export async function importSplitwiseCsvFiles(
   const stats = { imported: 0, skipped: 0, updated: 0 };
 
   for (const file of files) {
-    const content = readFileSync(file, 'utf-8');
-    const lines = content.split('\n').filter(line => line.trim());
+    let content = readFileSync(file, 'utf-8');
     
-    if (lines.length === 0) {
+    // Remove UTF-8 BOM if present
+    if (content.charCodeAt(0) === 0xFEFF) {
+      content = content.substring(1);
+    }
+
+    // Parse CSV with papaparse (handles CRLF, quoted fields, escaped quotes)
+    const parsed = Papa.parse(content, {
+      skipEmptyLines: true,
+      delimiter: ',',
+    });
+
+    if (!parsed.data || parsed.data.length === 0) {
       continue;
     }
 
-    const header = lines[0].split(',').map(h => h.trim());
+    const rows = parsed.data as string[][];
     
-    // Find the user's column
-    const meIndex = header.indexOf(meName);
-    if (meIndex === -1) {
-      throw new Error(`Column "${meName}" not found in CSV header. Available columns: ${header.join(', ')}`);
+    // Find header row (first row with "Date" or "Datum" in first cell)
+    let headerIndex = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const firstCell = rows[i][0]?.trim() || '';
+      if (firstCell === 'Date' || firstCell === 'Datum') {
+        headerIndex = i;
+        break;
+      }
     }
 
-    const dateIndex = header.indexOf('Date');
-    const descIndex = header.indexOf('Description');
-    const categoryIndex = header.indexOf('Category');
-    const costIndex = header.indexOf('Cost');
-    const currencyIndex = header.indexOf('Currency');
+    if (headerIndex === -1) {
+      throw new Error(`No header row found in ${file}. Expected first cell to be "Date" or "Datum".`);
+    }
+
+    const header = rows[headerIndex].map(h => h.trim());
+    
+    // Find column indices (support English and German)
+    const dateIndex = findColumn(header, ['Date', 'Datum']);
+    const descIndex = findColumn(header, ['Description', 'Beschreibung']);
+    const categoryIndex = findColumn(header, ['Category', 'Kategorie']);
+    const costIndex = findColumn(header, ['Cost', 'Kosten']);
+    const currencyIndex = findColumn(header, ['Currency', 'Währung']);
+    const meIndex = header.indexOf(meName);
 
     if (dateIndex === -1 || descIndex === -1 || categoryIndex === -1 || costIndex === -1 || currencyIndex === -1) {
       throw new Error(`CSV header missing required columns. Found: ${header.join(', ')}`);
+    }
+
+    if (meIndex === -1) {
+      throw new Error(`Column "${meName}" not found in CSV header. Available columns: ${header.join(', ')}`);
     }
 
     // Track identical rows for stable ID generation
@@ -340,36 +367,37 @@ export async function importSplitwiseCsvFiles(
       .digest('hex')
       .substring(0, 8);
 
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const fields = parseCSVLine(line);
+    // Process data rows (after header)
+    for (let i = headerIndex + 1; i < rows.length; i++) {
+      const fields = rows[i];
       
-      // Skip Total balance row
-      const description = fields[descIndex]?.trim() || '';
-      if (description === 'Total balance') {
-        stats.skipped++;
-        continue;
-      }
-
-      // Skip payment rows
-      const category = fields[categoryIndex]?.trim() || '';
-      if (category === 'Payment') {
-        stats.skipped++;
-        continue;
-      }
-
+      // Trim all fields
       const date = fields[dateIndex]?.trim() || '';
+      const description = fields[descIndex]?.trim() || '';
+      const category = fields[categoryIndex]?.trim() || '';
+      const cost = fields[costIndex]?.trim() || '';
+      const currency = fields[currencyIndex]?.trim() || '';
+      const meValue = fields[meIndex]?.trim() || '';
+
+      // Skip summary rows (Total balance / Gesamtbilanz)
+      if (description === 'Total balance' || description === 'Gesamtbilanz') {
+        stats.skipped++;
+        continue;
+      }
+
+      // Skip payment rows (Payment / Zahlung)
+      if (category === 'Payment' || category === 'Zahlung') {
+        stats.skipped++;
+        continue;
+      }
+
+      // Skip rows outside target month
       if (!date.startsWith(targetMonthPrefix)) {
         stats.skipped++;
         continue;
       }
 
-      const cost = fields[costIndex]?.trim() || '';
-      const currency = fields[currencyIndex]?.trim() || '';
-      const meValue = fields[meIndex]?.trim() || '';
-
+      // Skip zero or empty net
       if (!meValue || meValue === '0' || meValue === '0.00') {
         stats.skipped++;
         continue;
@@ -383,8 +411,8 @@ export async function importSplitwiseCsvFiles(
       }
 
       // User's amount is negative of their net balance
-      // If user's net is -12.50 (they owe), amount is +12.50
-      // If user's net is +40 (they are owed), amount is -40
+      // If user's net is +100 (they paid/are owed), amount is -100
+      // If user's net is -47.77 (they owe), amount is +47.77
       const amount = -meNet;
 
       // Generate stable ID
@@ -410,31 +438,12 @@ export async function importSplitwiseCsvFiles(
   return stats;
 }
 
-function parseCSVLine(line: string): string[] {
-  const fields: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        // Escaped quote
-        current += '"';
-        i++;
-      } else {
-        // Toggle quote mode
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      fields.push(current);
-      current = '';
-    } else {
-      current += char;
+function findColumn(header: string[], names: string[]): number {
+  for (const name of names) {
+    const index = header.indexOf(name);
+    if (index !== -1) {
+      return index;
     }
   }
-  
-  fields.push(current);
-  return fields;
+  return -1;
 }

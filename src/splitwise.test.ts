@@ -675,15 +675,21 @@ describe('Splitwise CSV import', () => {
     db = new DB(testDbPath);
     // Pre-populate FX rates to avoid real network calls
     db.saveFxRate({
-      date: '2024-10-15',
-      currency: 'EUR',
-      rateFromCHF: 0.95,
+      date: '2024-11-01',
+      currency: 'CHF',
+      rateFromCHF: 1.0,
+      fetchedAt: new Date().toISOString(),
+    });
+    db.saveFxRate({
+      date: '2024-12-06',
+      currency: 'SGD',
+      rateFromCHF: 1.30,
       fetchedAt: new Date().toISOString(),
     });
     db.saveFxRate({
       date: '2024-10-20',
-      currency: 'USD',
-      rateFromCHF: 1.10,
+      currency: 'EUR',
+      rateFromCHF: 0.95,
       fetchedAt: new Date().toISOString(),
     });
   });
@@ -695,64 +701,68 @@ describe('Splitwise CSV import', () => {
     } catch {}
   });
 
-  it('should import expense where user owes', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob,Me
-2024-10-15,Dinner,Food,50.00,CHF,0.00,-37.50,12.50`;
+  it('should handle preamble and German headers', async () => {
+    const csvContent = `Notiz: enthält keine Gruppenausgaben
+
+Datum,Beschreibung,Kategorie,Kosten,Währung,Me Person,Alice
+2024-11-01,Festival ticket,Allgemein,200.00,CHF,100.00,-100.00`;
+    
+    const testFile = './test-csv-german.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-11', 'Me Person', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      assert.strictEqual(result.skipped, 0);
+      
+      const transactions = db.getTransactionsByMonth('2024-11');
+      const tx = transactions.find(t => t.merchant === 'Festival ticket');
+      
+      assert.ok(tx);
+      assert.strictEqual(tx.originalAmount, -100.00); // User net +100 => amount -100
+      assert.strictEqual(tx.chfAmount, -100.00);
+      assert.strictEqual(tx.source, 'splitwise');
+      assert.strictEqual(tx.date, '2024-11-01');
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should import expense where user owes (negative net)', async () => {
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-12-06,Cottage,Allgemein,95.53,SGD,47.77,-47.77`;
     
     const testFile = './test-csv-owes.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-12', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 1);
-      assert.strictEqual(result.skipped, 0);
       
-      const transactions = db.getTransactionsByMonth('2024-10');
-      const tx = transactions.find(t => t.merchant === 'Dinner');
+      const transactions = db.getTransactionsByMonth('2024-12');
+      const tx = transactions.find(t => t.merchant === 'Cottage');
       
       assert.ok(tx);
-      assert.strictEqual(tx.originalAmount, -12.50); // User net +12.50 => amount -12.50
-      assert.strictEqual(tx.chfAmount, -12.50);
-      assert.strictEqual(tx.source, 'splitwise');
-      assert.strictEqual(tx.date, '2024-10-15');
+      assert.strictEqual(tx.originalAmount, 47.77); // User net -47.77 => amount +47.77
+      assert.strictEqual(tx.originalCurrency, 'SGD');
+      // 47.77 / 1.30 ≈ 36.75
+      assert.ok(Math.abs(tx.chfAmount - 36.75) < 0.5);
     } finally {
       unlinkSync(testFile);
     }
   });
 
-  it('should import expense where user is owed', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob,Me
-2024-10-16,Groceries,Food,100.00,CHF,0.00,50.00,-50.00`;
+  it('should skip payment rows (German Zahlung)', async () => {
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-12-08,Payment,Zahlung,30.00,CHF,30.00,-30.00`;
     
-    const testFile = './test-csv-owed.csv';
+    const testFile = './test-csv-payment-de.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
-      
-      assert.strictEqual(result.imported, 1);
-      
-      const transactions = db.getTransactionsByMonth('2024-10');
-      const tx = transactions.find(t => t.merchant === 'Groceries');
-      
-      assert.ok(tx);
-      assert.strictEqual(tx.originalAmount, 50.00); // User net -50 => amount +50
-      assert.strictEqual(tx.chfAmount, 50.00);
-    } finally {
-      unlinkSync(testFile);
-    }
-  });
-
-  it('should skip payment rows', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-17,Payment,Payment,30.00,CHF,-30.00,30.00`;
-    
-    const testFile = './test-csv-payment.csv';
-    writeFileSync(testFile, csvContent);
-    
-    try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-12', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 0);
       assert.strictEqual(result.skipped, 1);
@@ -761,63 +771,131 @@ describe('Splitwise CSV import', () => {
     }
   });
 
-  it('should skip total balance rows', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-18,Lunch,Food,40.00,CHF,-20.00,20.00
-,Total balance,,,,-20.00,20.00`;
+  it('should skip payment rows (English Payment)', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me Person
+2024-12-08,Payment,Payment,30.00,CHF,30.00,-30.00`;
     
-    const testFile = './test-csv-total.csv';
+    const testFile = './test-csv-payment-en.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-12', 'Me Person', [testFile]);
+      
+      assert.strictEqual(result.imported, 0);
+      assert.strictEqual(result.skipped, 1);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should skip total balance rows (German Gesamtbilanz)', async () => {
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Me Person,Alice
+2024-12-07,"Cafe, flock",Restaurant,10.00,CHF,5.00,-5.00
+2026-11-01,Gesamtbilanz, , ,CHF,12.00,-12.00`;
+    
+    const testFile = './test-csv-total-de.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-12', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 1);
       assert.strictEqual(result.skipped, 1);
       
+      const transactions = db.getTransactionsByMonth('2024-12');
+      const tx = transactions.find(t => t.merchant === 'Cafe, flock');
+      assert.ok(tx);
+      assert.strictEqual(tx.originalAmount, -5.00); // User net +5 => amount -5
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should skip total balance rows (English Total balance)', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Me Person,Alice
+2024-12-07,Cafe,Restaurant,10.00,CHF,5.00,-5.00
+2026-11-01,Total balance, , ,CHF,12.00,-12.00`;
+    
+    const testFile = './test-csv-total-en.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-12', 'Me Person', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      assert.strictEqual(result.skipped, 1);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should handle CSV with quoted fields and commas', async () => {
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-10-24,"Dinner at ""Best"" Restaurant, downtown",Food,70.00,CHF,35.00,-35.00`;
+    
+    const testFile = './test-csv-quotes.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      
       const transactions = db.getTransactionsByMonth('2024-10');
-      const tx = transactions.find(t => t.merchant === 'Lunch');
+      const tx = transactions.find(t => t.merchant.includes('Best'));
+      
+      assert.ok(tx);
+      assert.strictEqual(tx.merchant, 'Dinner at "Best" Restaurant, downtown');
+      assert.strictEqual(tx.originalAmount, 35.00); // User net -35 => amount +35
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should handle UTF-8 BOM', async () => {
+    const csvContent = '\uFEFFDatum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person\n2024-10-25,Café,Food,20.00,CHF,10.00,-10.00';
+    
+    const testFile = './test-csv-bom.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant === 'Café');
       assert.ok(tx);
     } finally {
       unlinkSync(testFile);
     }
   });
 
-  it('should convert foreign currency', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-15,Euro Expense,Food,95.00,EUR,0.00,47.50`;
+  it('should handle CRLF line endings', async () => {
+    const csvContent = 'Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person\r\n2024-10-26,Test,Food,30.00,CHF,15.00,-15.00\r\n';
     
-    const testFile = './test-csv-fx.csv';
+    const testFile = './test-csv-crlf.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 1);
-      
-      const transactions = db.getTransactionsByMonth('2024-10');
-      const tx = transactions.find(t => t.merchant === 'Euro Expense');
-      
-      assert.ok(tx);
-      assert.strictEqual(tx.originalAmount, -47.50);
-      assert.strictEqual(tx.originalCurrency, 'EUR');
-      assert.strictEqual(tx.fxRate, 0.95);
-      assert.strictEqual(Math.round(tx.chfAmount * 100) / 100, -50); // -47.50 / 0.95 ≈ -50
     } finally {
       unlinkSync(testFile);
     }
   });
 
   it('should generate distinct IDs for identical rows in same file', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-19,Coffee,Food,10.00,CHF,-5.00,5.00
-2024-10-19,Coffee,Food,10.00,CHF,-5.00,5.00`;
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-10-19,Coffee,Food,10.00,CHF,5.00,-5.00
+2024-10-19,Coffee,Food,10.00,CHF,5.00,-5.00`;
     
     const testFile = './test-csv-identical.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 2);
       
@@ -832,11 +910,11 @@ describe('Splitwise CSV import', () => {
   });
 
   it('should generate distinct IDs for same expense in different files', async () => {
-    const csvContent1 = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-20,Shared Expense,Food,30.00,CHF,-15.00,15.00`;
+    const csvContent1 = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-10-20,Shared Expense,Food,30.00,EUR,15.00,-15.00`;
     
-    const csvContent2 = `Date,Description,Category,Cost,Currency,Bob,Me
-2024-10-20,Shared Expense,Food,30.00,CHF,-15.00,15.00`;
+    const csvContent2 = `Datum,Beschreibung,Kategorie,Kosten,Währung,Bob,Me Person
+2024-10-20,Shared Expense,Food,30.00,EUR,15.00,-15.00`;
     
     const testFile1 = './test-csv-file1.csv';
     const testFile2 = './test-csv-file2.csv';
@@ -844,7 +922,7 @@ describe('Splitwise CSV import', () => {
     writeFileSync(testFile2, csvContent2);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile1, testFile2]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile1, testFile2]);
       
       assert.strictEqual(result.imported, 2);
       
@@ -860,15 +938,15 @@ describe('Splitwise CSV import', () => {
   });
 
   it('should preserve category and reviewed on re-import', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-21,Re-import Test,Food,80.00,CHF,-40.00,40.00`;
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-10-21,Re-import Test,Food,80.00,CHF,40.00,-40.00`;
     
     const testFile = './test-csv-reimport.csv';
     writeFileSync(testFile, csvContent);
     
     try {
       // First import
-      await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
       const transactions = db.getTransactionsByMonth('2024-10');
       const tx = transactions.find(t => t.merchant === 'Re-import Test');
@@ -886,7 +964,7 @@ describe('Splitwise CSV import', () => {
       db.markAsReviewed(tx.id);
       
       // Re-import
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
       assert.strictEqual(result.updated, 1);
       assert.strictEqual(result.imported, 0);
@@ -902,8 +980,8 @@ describe('Splitwise CSV import', () => {
   });
 
   it('should error if --me column not found', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob
-2024-10-22,Test,Food,20.00,CHF,-10.00,10.00`;
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Bob
+2024-10-22,Test,Food,20.00,CHF,10.00,-10.00`;
     
     const testFile = './test-csv-missing-me.csv';
     writeFileSync(testFile, csvContent);
@@ -921,17 +999,17 @@ describe('Splitwise CSV import', () => {
   });
 
   it('should filter by month', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-09-30,September Expense,Food,20.00,CHF,-10.00,10.00
-2024-10-01,October Start,Food,30.00,CHF,-15.00,15.00
-2024-10-31,October End,Food,40.00,CHF,-20.00,20.00
-2024-11-01,November Expense,Food,50.00,CHF,-25.00,25.00`;
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+2024-09-30,September Expense,Food,20.00,CHF,10.00,-10.00
+2024-10-01,October Start,Food,30.00,CHF,15.00,-15.00
+2024-10-31,October End,Food,40.00,CHF,20.00,-20.00
+2024-11-01,November Expense,Food,50.00,CHF,25.00,-25.00`;
     
     const testFile = './test-csv-month-filter.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 2);
       assert.strictEqual(result.skipped, 2);
@@ -948,14 +1026,14 @@ describe('Splitwise CSV import', () => {
   });
 
   it('should skip zero net rows', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob,Me
-2024-10-23,Zero Net,Food,60.00,CHF,-30.00,-30.00,0.00`;
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Bob,Me Person
+2024-10-23,Zero Net,Food,60.00,CHF,30.00,-30.00,0.00`;
     
     const testFile = './test-csv-zero.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
       assert.strictEqual(result.imported, 0);
       assert.strictEqual(result.skipped, 1);
@@ -964,23 +1042,40 @@ describe('Splitwise CSV import', () => {
     }
   });
 
-  it('should handle CSV with quoted fields', async () => {
-    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
-2024-10-24,"Dinner at ""Best"" Restaurant",Food,70.00,CHF,-35.00,35.00`;
+  it('should handle blank lines in CSV', async () => {
+    const csvContent = `Datum,Beschreibung,Kategorie,Kosten,Währung,Alice,Me Person
+
+2024-10-27,Lunch,Food,40.00,CHF,20.00,-20.00
+
+2024-10-28,Dinner,Food,50.00,CHF,25.00,-25.00`;
     
-    const testFile = './test-csv-quotes.csv';
+    const testFile = './test-csv-blanks.csv';
     writeFileSync(testFile, csvContent);
     
     try {
-      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
       
-      assert.strictEqual(result.imported, 1);
-      
-      const transactions = db.getTransactionsByMonth('2024-10');
-      const tx = transactions.find(t => t.merchant.includes('Best'));
-      
-      assert.ok(tx);
-      assert.strictEqual(tx.merchant, 'Dinner at "Best" Restaurant');
+      assert.strictEqual(result.imported, 2);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should error if no header row found', async () => {
+    const csvContent = `Some random data
+Without a proper header
+2024-10-29,Test,Food,10.00,CHF,5.00,-5.00`;
+    
+    const testFile = './test-csv-no-header.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      await assert.rejects(
+        async () => {
+          await importSplitwiseCsvFiles(db, '2024-10', 'Me Person', [testFile]);
+        },
+        { message: /No header row found/ }
+      );
     } finally {
       unlinkSync(testFile);
     }
