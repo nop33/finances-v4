@@ -1,8 +1,8 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { DB } from './db.js';
-import { importSplitwiseExpenses } from './splitwise.js';
-import { unlinkSync } from 'fs';
+import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
+import { unlinkSync, writeFileSync } from 'fs';
 
 describe('Splitwise import', () => {
   const testDbPath = './test-splitwise.sqlite';
@@ -664,6 +664,326 @@ describe('Splitwise import', () => {
     // Paid 0, owed 25 => net +25 (owes them)
     assert.strictEqual(tx3005.originalAmount, 25.00);
     assert.strictEqual(tx3005.chfAmount, 25.00);
+  });
+});
+
+describe('Splitwise CSV import', () => {
+  const testDbPath = './test-splitwise-csv.sqlite';
+  let db: DB;
+
+  before(() => {
+    db = new DB(testDbPath);
+    // Pre-populate FX rates to avoid real network calls
+    db.saveFxRate({
+      date: '2024-10-15',
+      currency: 'EUR',
+      rateFromCHF: 0.95,
+      fetchedAt: new Date().toISOString(),
+    });
+    db.saveFxRate({
+      date: '2024-10-20',
+      currency: 'USD',
+      rateFromCHF: 1.10,
+      fetchedAt: new Date().toISOString(),
+    });
+  });
+
+  after(() => {
+    db.close();
+    try {
+      unlinkSync(testDbPath);
+    } catch {}
+  });
+
+  it('should import expense where user owes', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob,Me
+2024-10-15,Dinner,Food,50.00,CHF,0.00,-37.50,12.50`;
+    
+    const testFile = './test-csv-owes.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      assert.strictEqual(result.skipped, 0);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant === 'Dinner');
+      
+      assert.ok(tx);
+      assert.strictEqual(tx.originalAmount, -12.50); // User net +12.50 => amount -12.50
+      assert.strictEqual(tx.chfAmount, -12.50);
+      assert.strictEqual(tx.source, 'splitwise');
+      assert.strictEqual(tx.date, '2024-10-15');
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should import expense where user is owed', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob,Me
+2024-10-16,Groceries,Food,100.00,CHF,0.00,50.00,-50.00`;
+    
+    const testFile = './test-csv-owed.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant === 'Groceries');
+      
+      assert.ok(tx);
+      assert.strictEqual(tx.originalAmount, 50.00); // User net -50 => amount +50
+      assert.strictEqual(tx.chfAmount, 50.00);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should skip payment rows', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-17,Payment,Payment,30.00,CHF,-30.00,30.00`;
+    
+    const testFile = './test-csv-payment.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 0);
+      assert.strictEqual(result.skipped, 1);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should skip total balance rows', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-18,Lunch,Food,40.00,CHF,-20.00,20.00
+,Total balance,,,,-20.00,20.00`;
+    
+    const testFile = './test-csv-total.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      assert.strictEqual(result.skipped, 1);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant === 'Lunch');
+      assert.ok(tx);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should convert foreign currency', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-15,Euro Expense,Food,95.00,EUR,0.00,47.50`;
+    
+    const testFile = './test-csv-fx.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant === 'Euro Expense');
+      
+      assert.ok(tx);
+      assert.strictEqual(tx.originalAmount, -47.50);
+      assert.strictEqual(tx.originalCurrency, 'EUR');
+      assert.strictEqual(tx.fxRate, 0.95);
+      assert.strictEqual(Math.round(tx.chfAmount * 100) / 100, -50); // -47.50 / 0.95 ≈ -50
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should generate distinct IDs for identical rows in same file', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-19,Coffee,Food,10.00,CHF,-5.00,5.00
+2024-10-19,Coffee,Food,10.00,CHF,-5.00,5.00`;
+    
+    const testFile = './test-csv-identical.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 2);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const coffees = transactions.filter(t => t.merchant === 'Coffee');
+      
+      assert.strictEqual(coffees.length, 2);
+      assert.notStrictEqual(coffees[0].id, coffees[1].id);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should generate distinct IDs for same expense in different files', async () => {
+    const csvContent1 = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-20,Shared Expense,Food,30.00,CHF,-15.00,15.00`;
+    
+    const csvContent2 = `Date,Description,Category,Cost,Currency,Bob,Me
+2024-10-20,Shared Expense,Food,30.00,CHF,-15.00,15.00`;
+    
+    const testFile1 = './test-csv-file1.csv';
+    const testFile2 = './test-csv-file2.csv';
+    writeFileSync(testFile1, csvContent1);
+    writeFileSync(testFile2, csvContent2);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile1, testFile2]);
+      
+      assert.strictEqual(result.imported, 2);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const shared = transactions.filter(t => t.merchant === 'Shared Expense');
+      
+      assert.strictEqual(shared.length, 2);
+      assert.notStrictEqual(shared[0].id, shared[1].id);
+    } finally {
+      unlinkSync(testFile1);
+      unlinkSync(testFile2);
+    }
+  });
+
+  it('should preserve category and reviewed on re-import', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-21,Re-import Test,Food,80.00,CHF,-40.00,40.00`;
+    
+    const testFile = './test-csv-reimport.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      // First import
+      await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant === 'Re-import Test');
+      assert.ok(tx);
+      
+      // Categorize and review
+      db.updateTransactionCategorization(
+        tx.id,
+        'need.food.groceries',
+        0.95,
+        'Test categorization',
+        'merchant_memory',
+        { newMerchant: false, unusualAmount: false, possibleDuplicate: false, unconvertedFx: false }
+      );
+      db.markAsReviewed(tx.id);
+      
+      // Re-import
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.updated, 1);
+      assert.strictEqual(result.imported, 0);
+      
+      const txAfter = db.getTransaction(tx.id);
+      assert.ok(txAfter);
+      assert.strictEqual(txAfter.category, 'need.food.groceries');
+      assert.strictEqual(txAfter.reviewed, true);
+      assert.strictEqual(txAfter.confidence, 0.95);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should error if --me column not found', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob
+2024-10-22,Test,Food,20.00,CHF,-10.00,10.00`;
+    
+    const testFile = './test-csv-missing-me.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      await assert.rejects(
+        async () => {
+          await importSplitwiseCsvFiles(db, '2024-10', 'NotFound', [testFile]);
+        },
+        { message: /Column "NotFound" not found in CSV header/ }
+      );
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should filter by month', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-09-30,September Expense,Food,20.00,CHF,-10.00,10.00
+2024-10-01,October Start,Food,30.00,CHF,-15.00,15.00
+2024-10-31,October End,Food,40.00,CHF,-20.00,20.00
+2024-11-01,November Expense,Food,50.00,CHF,-25.00,25.00`;
+    
+    const testFile = './test-csv-month-filter.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 2);
+      assert.strictEqual(result.skipped, 2);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const imported = transactions.filter(t => 
+        t.merchant === 'October Start' || t.merchant === 'October End'
+      );
+      
+      assert.strictEqual(imported.length, 2);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should skip zero net rows', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Bob,Me
+2024-10-23,Zero Net,Food,60.00,CHF,-30.00,-30.00,0.00`;
+    
+    const testFile = './test-csv-zero.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 0);
+      assert.strictEqual(result.skipped, 1);
+    } finally {
+      unlinkSync(testFile);
+    }
+  });
+
+  it('should handle CSV with quoted fields', async () => {
+    const csvContent = `Date,Description,Category,Cost,Currency,Alice,Me
+2024-10-24,"Dinner at ""Best"" Restaurant",Food,70.00,CHF,-35.00,35.00`;
+    
+    const testFile = './test-csv-quotes.csv';
+    writeFileSync(testFile, csvContent);
+    
+    try {
+      const result = await importSplitwiseCsvFiles(db, '2024-10', 'Me', [testFile]);
+      
+      assert.strictEqual(result.imported, 1);
+      
+      const transactions = db.getTransactionsByMonth('2024-10');
+      const tx = transactions.find(t => t.merchant.includes('Best'));
+      
+      assert.ok(tx);
+      assert.strictEqual(tx.merchant, 'Dinner at "Best" Restaurant');
+    } finally {
+      unlinkSync(testFile);
+    }
   });
 });
 
