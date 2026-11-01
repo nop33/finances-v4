@@ -3,7 +3,7 @@ import { DB } from './db.js';
 import { correctTransaction, categorizeTransaction } from './categorize.js';
 import { loadCategories } from './categories.js';
 import { Transaction, Category } from './types.js';
-import { generateId } from './parsers/utils.js';
+import crypto from 'crypto';
 
 function escapeHtml(text: string | undefined | null): string {
   if (!text) return '';
@@ -389,16 +389,8 @@ export class WebServer {
           return;
         }
 
+        const id = `twi-${crypto.randomUUID()}`;
         const yearMonth = date.substring(0, 7);
-        const twintTransactions = this.db.getTransactionsByMonth(yearMonth).filter(t => t.source === 'twint');
-        
-        const occurrence = twintTransactions.filter(t => 
-          t.date === date && 
-          t.merchant === merchant.trim() && 
-          Math.abs(t.chfAmount - amount) < 0.01
-        ).length + 1;
-
-        const id = generateId('twi', date, merchant.trim(), amount, 0, occurrence);
 
         const transaction: Transaction = {
           id,

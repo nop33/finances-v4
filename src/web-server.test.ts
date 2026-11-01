@@ -1182,3 +1182,156 @@ test('WebServer: twint page HTML escapes user input', () => {
     delete process.env.CATEGORY_CONFIG;
   }
 });
+
+test('WebServer: twint add/add/delete/add with identical data preserves all entries', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const identicalData = JSON.stringify({
+      date: '2024-10-15',
+      merchant: 'Coop',
+      amount: 15.00
+    });
+
+    // Add transaction A
+    const resultA = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') handler(identicalData);
+          else if (event === 'end') handler();
+        }
+      } as any;
+
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: () => {},
+        end: (data: string) => {
+          responseBody = data;
+          resolve(JSON.parse(responseBody));
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    const idA = resultA.id;
+
+    // Add transaction B (identical to A)
+    const resultB = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') handler(identicalData);
+          else if (event === 'end') handler();
+        }
+      } as any;
+
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: () => {},
+        end: (data: string) => {
+          responseBody = data;
+          resolve(JSON.parse(responseBody));
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    const idB = resultB.id;
+    assert.notStrictEqual(idA, idB, 'A and B should have different IDs');
+
+    // Delete transaction A
+    await new Promise<void>((resolve) => {
+      const req = {
+        method: 'DELETE',
+        url: `/api/twint/${idA}`,
+        headers: {}
+      } as any;
+
+      const res = {
+        setHeader: () => {},
+        writeHead: () => {},
+        end: () => resolve()
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    // Verify A is deleted
+    const deletedA = db.getTransaction(idA);
+    assert.strictEqual(deletedA, undefined, 'A should be deleted');
+
+    // Add transaction C (identical to A and B)
+    const resultC = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') handler(identicalData);
+          else if (event === 'end') handler();
+        }
+      } as any;
+
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: () => {},
+        end: (data: string) => {
+          responseBody = data;
+          resolve(JSON.parse(responseBody));
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    const idC = resultC.id;
+    assert.notStrictEqual(idB, idC, 'B and C should have different IDs');
+    assert.notStrictEqual(idA, idC, 'A and C should have different IDs (even though A is deleted)');
+
+    // Verify B and C both exist
+    const txB = db.getTransaction(idB);
+    const txC = db.getTransaction(idC);
+    
+    assert.ok(txB, 'Transaction B should still exist');
+    assert.ok(txC, 'Transaction C should exist');
+    
+    // Verify B was not overwritten by C
+    assert.strictEqual(txB?.merchant, 'Coop');
+    assert.strictEqual(txC?.merchant, 'Coop');
+
+    // Count total transactions to ensure we have exactly 2
+    const allTransactions = db.getTransactionsByMonth('2024-10').filter(t => t.source === 'twint');
+    assert.strictEqual(allTransactions.length, 2, 'Should have exactly 2 twint transactions (B and C)');
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
