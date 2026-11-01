@@ -42,6 +42,7 @@ export interface FxRate {
 }
 
 export interface ParsedTransaction {
+  id?: string;
   date: string;
   merchant: string;
   description?: string;

@@ -18,7 +18,7 @@ export async function importTransactions(
     const occurrence = (sourceOccurrences.get(naturalKey) || 0) + 1;
     sourceOccurrences.set(naturalKey, occurrence);
 
-    const id = generateId(
+    const id = parsed.id || generateId(
       parsed.source.substring(0, 3),
       parsed.date,
       parsed.merchant,

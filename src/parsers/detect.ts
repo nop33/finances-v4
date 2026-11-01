@@ -4,6 +4,7 @@ export type BankFormat =
   | 'neon'
   | 'revolut-csv'
   | 'revolut-xlsx'
+  | 'sbb'
   | 'unknown';
 
 export function detectFormat(content: string | Buffer, filename?: string): BankFormat {
@@ -28,6 +29,10 @@ export function detectFormat(content: string | Buffer, filename?: string): BankF
 
   if (firstLine.includes('Type,Product') || firstLine.includes('Started Date')) {
     return 'revolut-csv';
+  }
+
+  if (text.includes('EasyRide purchase receipt') || text.includes('EasyRide Kaufbeleg')) {
+    return 'sbb';
   }
 
   return 'unknown';

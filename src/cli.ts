@@ -16,6 +16,7 @@ const command = args[0];
 if (!command) {
   console.log(`Usage:
   finances import <file1> [file2 ...]           Import transaction files
+  finances sbb import <file1.txt> [file2.txt ...]  Import SBB EasyRide receipt files
   finances splitwise import --month YYYY-MM     Import Splitwise expenses for a month
   finances splitwise import-csv --month YYYY-MM --me "Name" <file1> [file2 ...]
                                                 Import Splitwise CSV exports
@@ -50,6 +51,32 @@ try {
       await importTransactions(db, parsed);
       console.log(`  Imported successfully`);
     }
+  } else if (command === 'sbb' && args[1] === 'import') {
+    const files = args.slice(2);
+    if (files.length === 0) {
+      console.error('Error: No files specified');
+      process.exit(1);
+    }
+
+    let totalImported = 0;
+    let skipped = 0;
+
+    for (const file of files) {
+      console.log(`Processing ${file}...`);
+      try {
+        const parsed = parseFile(file);
+        console.log(`  Parsed ${parsed.length} transactions`);
+        await importTransactions(db, parsed);
+        console.log(`  Imported successfully`);
+        totalImported += parsed.length;
+      } catch (error) {
+        console.error(`  Error: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`  Skipping ${file}`);
+        skipped++;
+      }
+    }
+
+    console.log(`\nImport complete: ${totalImported} imported, ${skipped} skipped`);
   } else if (command === 'list') {
     const monthIndex = args.indexOf('--month');
     if (monthIndex === -1 || !args[monthIndex + 1]) {
