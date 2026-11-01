@@ -4,7 +4,18 @@ Personal monthly expense tracker for Zürich. Imports transactions from Swiss ba
 
 ## Status
 
-This is the first slice: the ingest core. It parses bank exports, converts currencies, and stores transactions. Categorization rules, Splitwise, SBB, the review UI, and Google Sheets export are future work.
+This is the v4 feature set with auto-categorisation. It parses bank exports, converts currencies, stores transactions, and automatically categorises them using merchant memory and rules.
+
+## Features
+
+- **Parsing**: Reads bank CSV/XLSX exports, normalizes dates and amounts
+- **FX conversion**: Fetches historical rates from frankfurter.app for the transaction date, caches them in SQLite
+- **Stable IDs**: Includes file row index and occurrence count to keep same-day duplicate purchases distinct
+- **Idempotent imports**: Re-importing the same file updates existing records by ID
+- **Category map**: Loads expense categories from your local config with group, leaf name, column letter, and tier
+- **Auto-categorisation**: Assigns categories using merchant memory (learned from corrections) and user-defined rules
+- **Anomaly detection**: Flags new merchants, unusual amounts, possible duplicates, and unconverted FX
+- **Merchant normalisation**: Strips payment processor prefixes (SumUp, Zettle, PayPal), card numbers, and city suffixes
 
 ## Supported banks
 
@@ -63,14 +74,33 @@ If the file is missing, the CLI will fail with a clear error message explaining 
 - **Stable IDs**: Includes file row index and occurrence count to keep same-day duplicate purchases distinct
 - **Idempotent imports**: Re-importing the same file updates existing records by ID
 - **Category map**: Loads expense categories from your local config with group, leaf name, column letter, and tier (need/want/gifting/savings)
+- **Auto-categorisation**: Categorises transactions using:
+  - **Merchant memory** (priority 1): Learned from user corrections, with smart merchant normalisation
+  - **User rules** (priority 2): Pattern-based rules stored in SQLite
+  - **Unknown** (priority 3): Uncategorised transactions flagged for review
+- **Merchant normalisation**: Strips payment processor prefixes (SumUp*/Zettle*/PayPal*), card numbers, asterisks, and city suffixes (Zurich/ZH/CH)
+- **Anomaly detection**: Each transaction is checked for:
+  - **New merchant**: Never seen before
+  - **Unusual amount**: More than 2 standard deviations from this merchant's history (requires ≥3 past transactions)
+  - **Possible duplicate**: Same merchant and amount within 7 days (but NOT same-day identical, which are legitimate)
+  - **Unconverted FX**: Foreign currency without an FX rate
 
 ## CLI
 
 ```bash
 npm run build
 node dist/cli.js import exports/cembra.csv exports/neon.csv
+node dist/cli.js categorise --month 2024-10
 node dist/cli.js list --month 2024-10
+node dist/cli.js correct <txId> Meals/Snacks
 ```
+
+### Commands
+
+- **import**: Import one or more transaction files
+- **categorise --month YYYY-MM**: Auto-categorise all unreviewed transactions for the specified month
+- **list --month YYYY-MM**: List all transactions for the specified month
+- **correct <txId> <category>**: Manually correct a transaction's category, teaching merchant memory for future similar transactions
 
 ## Schema
 
@@ -88,12 +118,35 @@ node dist/cli.js list --month 2024-10
 - `fx_conversion_failed`: 1 if conversion failed
 - `file_row_index`: row number in the source file
 - `imported_at`: timestamp of import
+- `category`: assigned category (group/leaf format, e.g. "Meals/Snacks")
+- `confidence`: confidence score (0..1)
+- `explanation`: human-readable explanation of categorisation decision
+- `categorization_source`: merchant_memory, rule, or unknown
+- `reviewed`: 1 if the user has reviewed/corrected this transaction
+- `new_merchant`: 1 if this merchant was never seen before
+- `unusual_amount`: 1 if amount is >2σ from this merchant's history
+- `possible_duplicate`: 1 if same merchant+amount within 7 days (excluding same-day)
+- `unconverted_fx`: 1 if foreign currency without FX rate
 
 ### fx_rates
 
 - `date`, `currency`: composite key
 - `rate_from_chf`: CHF to currency rate (e.g. 0.95 for EUR means 1 CHF = 0.95 EUR)
 - `fetched_at`: timestamp
+
+### merchant_memory
+
+- `normalized_merchant`: primary key, the normalised merchant name
+- `category`: the category learned from corrections
+- `times_used`: number of times this merchant was corrected to this category
+- `last_used`: timestamp of last correction
+
+### categorization_rules
+
+- `id`: auto-increment primary key
+- `pattern`: substring pattern to match (case-insensitive)
+- `category`: category to assign when pattern matches
+- `description`: optional description of the rule
 
 ## Bugs fixed from v3
 
@@ -114,6 +167,12 @@ Tests cover:
 - Historical FX rates (mocked in tests)
 - Idempotent re-import
 - Category loading from config file
+- **Merchant normalisation**: Payment processor prefix stripping, card number removal, city suffix removal
+- **Categorisation sources**: Merchant memory, rules, unknown
+- **Confidence progression**: Confidence rises with repeated corrections
+- **Anomaly detection**: New merchant, unusual amount, possible duplicate (excluding same-day identical), unconverted FX
+- **Correction workflow**: Manual correction updates merchant memory and re-categorises similar transactions
+- **Human-readable explanations**: Each categorisation includes a meaningful explanation
 
 ## Configuration
 

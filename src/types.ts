@@ -13,6 +13,15 @@ export interface Transaction {
   fxConversionFailed?: boolean;
   fileRowIndex: number;
   importedAt: string;
+  category?: string;
+  confidence?: number;
+  explanation?: string;
+  categorizationSource?: 'merchant_memory' | 'rule' | 'unknown';
+  reviewed?: boolean;
+  newMerchant?: boolean;
+  unusualAmount?: boolean;
+  possibleDuplicate?: boolean;
+  unconvertedFx?: boolean;
 }
 
 export interface Category {
@@ -43,4 +52,18 @@ export interface ParsedTransaction {
 export interface ParserResult {
   transactions: ParsedTransaction[];
   source: string;
+}
+
+export interface MerchantMemory {
+  normalizedMerchant: string;
+  category: string;
+  timesUsed: number;
+  lastUsed: string;
+}
+
+export interface CategorizationRule {
+  id?: number;
+  pattern: string;
+  category: string;
+  description?: string;
 }
