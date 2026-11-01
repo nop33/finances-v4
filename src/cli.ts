@@ -6,6 +6,7 @@ import { importTransactions } from './import.js';
 import { categorizeMonth, correctTransaction } from './categorize.js';
 import { applyFixedBills } from './fixed.js';
 import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
+import { startServer } from './web-server.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 
@@ -23,6 +24,7 @@ if (!command) {
   finances correct <txId> <category>            Correct a transaction's category
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
   finances total --month YYYY-MM                Show month total (excludes covered charges)
+  finances serve [--port 4321] [--host 127.0.0.1]  Start web review server
 `);
   process.exit(0);
 }
@@ -220,6 +222,21 @@ try {
     console.log(`  Imported: ${result.imported} new expenses`);
     console.log(`  Updated: ${result.updated} existing expenses`);
     console.log(`  Skipped: ${result.skipped} (payments/zero/wrong month)`);
+  } else if (command === 'serve') {
+    const portIndex = args.indexOf('--port');
+    const port = portIndex !== -1 && args[portIndex + 1] 
+      ? parseInt(args[portIndex + 1]) 
+      : 4321;
+
+    const hostIndex = args.indexOf('--host');
+    const host = hostIndex !== -1 && args[hostIndex + 1]
+      ? args[hostIndex + 1]
+      : '127.0.0.1';
+
+    console.log(`Starting web server...`);
+    // Don't close DB - server needs it
+    startServer(db, port, host);
+    // Server runs indefinitely, process stays alive
   } else {
     console.error(`Unknown command: ${command}`);
     process.exit(1);
@@ -228,5 +245,7 @@ try {
   console.error('Error:', error);
   process.exit(1);
 } finally {
-  db.close();
+  if (command !== 'serve') {
+    db.close();
+  }
 }

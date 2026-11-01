@@ -10,12 +10,16 @@
   "scripts": {
     "build": "tsc && mkdir -p dist/test-fixtures && cp src/test-fixtures/*.json dist/test-fixtures/",
     "dev": "tsc --watch",
-    "test": "node --test --experimental-test-coverage 'dist/*.test.js' 'dist/**/*.test.js'",
+    "pretest": "npm run build",
+    "test": "node --test --experimental-test-coverage dist/*.test.js dist/**/*.test.js",
     "cli": "node dist/cli.js"
   },
   "keywords": ["finance", "expenses", "tracking"],
   "author": "Ilias Trichopoulos <hlias.nop@gmail.com>",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
     "papaparse": "^5.4.1",
