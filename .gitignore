@@ -7,6 +7,10 @@ exports/
 expences-columns.json
 **/expences-columns.json
 
+# Fixed bills configuration (contains personal data)
+fixed-bills.json
+**/fixed-bills.json
+
 # Databases
 *.sqlite
 *.sqlite3

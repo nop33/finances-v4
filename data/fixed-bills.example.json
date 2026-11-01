@@ -1,0 +1,51 @@
+{
+  "bills": [
+    {
+      "id": "example-rent",
+      "label": "Example rent",
+      "category": "Living/Rent",
+      "monthlyAmount": 2000,
+      "merchantPatterns": ["example landlord", "example property"]
+    },
+    {
+      "id": "example-insurance",
+      "label": "Example insurance",
+      "category": "Health/Insurance",
+      "monthlyAmount": 362.2833333333,
+      "renewalMonth": 1,
+      "merchantPatterns": ["example insurance co"]
+    },
+    {
+      "id": "example-subscription",
+      "label": "Example subscription",
+      "category": "Tech/Subscriptions",
+      "monthlyAmount": 9.99,
+      "renewalMonth": 6,
+      "merchantPatterns": ["example service"]
+    },
+    {
+      "id": "example-gym",
+      "label": "Example gym membership",
+      "category": "Living/Gym",
+      "monthlyAmount": 85,
+      "activeFrom": "2024-01",
+      "merchantPatterns": ["example gym", "example fitness"]
+    },
+    {
+      "id": "example-phone",
+      "label": "Example phone plan",
+      "category": "Tech/Phone",
+      "monthlyAmount": 29.90,
+      "merchantPatterns": ["example mobile", "example telecom"]
+    },
+    {
+      "id": "example-parking",
+      "label": "Example parking permit",
+      "category": "Movement/Parking",
+      "monthlyAmount": 16.6666666667,
+      "renewalMonth": 3,
+      "activeFrom": "2024-01",
+      "activeUntil": "2024-12"
+    }
+  ]
+}

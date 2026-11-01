@@ -1,0 +1,20 @@
+{
+  "columns": [
+    { "column": "A", "header": "Date", "role": "date" },
+    { "column": "B", "header": "Source", "role": "source" },
+    { "column": "C", "header": "Merchant", "role": "merchant" },
+    { "column": "D", "header": "Amount", "role": "amount" },
+    { "column": "E", "group": "Living", "header": "Rent", "role": "leaf_category" },
+    { "column": "F", "group": "Living", "header": "Gym", "role": "leaf_category" },
+    { "column": "G", "group": "Health", "header": "Insurance", "role": "leaf_category" },
+    { "column": "H", "group": "Tech", "header": "Subscriptions", "role": "leaf_category" },
+    { "column": "I", "group": "Tech", "header": "Phone", "role": "leaf_category" },
+    { "column": "J", "group": "Movement", "header": "Parking", "role": "leaf_category" }
+  ],
+  "tierGroups": {
+    "need": ["Living", "Health"],
+    "want": ["Tech"],
+    "gifting": [],
+    "savings": []
+  }
+}

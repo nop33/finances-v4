@@ -4,6 +4,7 @@ import { DB } from './db.js';
 import { parseFile } from './parsers/index.js';
 import { importTransactions } from './import.js';
 import { categorizeMonth, correctTransaction } from './categorize.js';
+import { applyFixedBills } from './fixed.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 
@@ -16,6 +17,7 @@ if (!command) {
   finances list --month YYYY-MM                 List transactions for a month
   finances categorise --month YYYY-MM           Auto-categorise transactions for a month
   finances correct <txId> <category>            Correct a transaction's category
+  finances fixed apply --month YYYY-MM          Apply fixed bills for a month
 `);
   process.exit(0);
 }
@@ -108,6 +110,22 @@ try {
     console.log(`Correcting transaction ${txId} to category ${category}...`);
     correctTransaction(db, txId, category);
     console.log(`Done. Merchant memory updated.`);
+  } else if (command === 'fixed' && args[1] === 'apply') {
+    const monthIndex = args.indexOf('--month');
+    if (monthIndex === -1 || !args[monthIndex + 1]) {
+      console.error('Error: --month YYYY-MM required');
+      process.exit(1);
+    }
+
+    const month = args[monthIndex + 1];
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      console.error('Error: Month must be in YYYY-MM format');
+      process.exit(1);
+    }
+
+    console.log(`Applying fixed bills for ${month}...`);
+    applyFixedBills(db, month);
+    console.log(`Fixed bills applied successfully`);
   } else {
     console.error(`Unknown command: ${command}`);
     process.exit(1);
