@@ -719,3 +719,466 @@ test('WebServer: malformed JSON in POST requests returns 400', () => {
     delete process.env.CATEGORY_CONFIG;
   }
 });
+
+test('WebServer: add twint transaction with valid data', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const reqData = JSON.stringify({
+      date: '2024-10-15',
+      merchant: 'Test Shop',
+      amount: 25.50,
+      note: 'Test purchase'
+    });
+
+    const result = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') {
+            handler(reqData);
+          } else if (event === 'end') {
+            handler();
+          }
+        }
+      } as any;
+
+      let statusCode = 0;
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: (code: number) => { statusCode = code; },
+        end: (data: string) => {
+          responseBody = data;
+          resolve({ statusCode, responseBody });
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    assert.strictEqual(result.statusCode, 200, 'Should return 200 OK');
+    const parsed = JSON.parse(result.responseBody);
+    assert.strictEqual(parsed.success, true);
+    assert.ok(parsed.id, 'Should return transaction id');
+
+    const tx = db.getTransaction(parsed.id);
+    assert.ok(tx, 'Transaction should exist in database');
+    assert.strictEqual(tx?.source, 'twint');
+    assert.strictEqual(tx?.merchant, 'Test Shop');
+    assert.strictEqual(tx?.chfAmount, 25.50);
+    assert.strictEqual(tx?.description, 'Test purchase');
+    assert.ok(tx?.confidence !== undefined, 'Transaction should have confidence score');
+    assert.ok(tx?.explanation, 'Transaction should have explanation');
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: add twint transaction validates required fields', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    // Missing merchant
+    let result = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') {
+            handler(JSON.stringify({ date: '2024-10-15', amount: 25.50 }));
+          } else if (event === 'end') {
+            handler();
+          }
+        }
+      } as any;
+
+      let statusCode = 0;
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: (code: number) => { statusCode = code; },
+        end: (data: string) => {
+          responseBody = data;
+          resolve({ statusCode, responseBody });
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    assert.strictEqual(result.statusCode, 400);
+    assert.ok(result.responseBody.includes('merchant'));
+
+    // Invalid amount (negative)
+    result = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') {
+            handler(JSON.stringify({ date: '2024-10-15', merchant: 'Test', amount: -10 }));
+          } else if (event === 'end') {
+            handler();
+          }
+        }
+      } as any;
+
+      let statusCode = 0;
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: (code: number) => { statusCode = code; },
+        end: (data: string) => {
+          responseBody = data;
+          resolve({ statusCode, responseBody });
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    assert.strictEqual(result.statusCode, 400);
+    assert.ok(result.responseBody.includes('amount'));
+
+    // Invalid date format
+    result = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') {
+            handler(JSON.stringify({ date: '15-10-2024', merchant: 'Test', amount: 10 }));
+          } else if (event === 'end') {
+            handler();
+          }
+        }
+      } as any;
+
+      let statusCode = 0;
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: (code: number) => { statusCode = code; },
+        end: (data: string) => {
+          responseBody = data;
+          resolve({ statusCode, responseBody });
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    assert.strictEqual(result.statusCode, 400);
+    assert.ok(result.responseBody.includes('date'));
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: twint transactions have unique IDs for same-day duplicates', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const reqData = JSON.stringify({
+      date: '2024-10-15',
+      merchant: 'Coop',
+      amount: 15.00
+    });
+
+    // Insert first transaction
+    const result1 = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') {
+            handler(reqData);
+          } else if (event === 'end') {
+            handler();
+          }
+        }
+      } as any;
+
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: () => {},
+        end: (data: string) => {
+          responseBody = data;
+          resolve(JSON.parse(responseBody));
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    const id1 = result1.id;
+
+    // Insert second identical transaction
+    const result2 = await new Promise<any>((resolve) => {
+      const req = {
+        method: 'POST',
+        url: '/api/twint',
+        headers: {},
+        on: (event: string, handler: Function) => {
+          if (event === 'data') {
+            handler(reqData);
+          } else if (event === 'end') {
+            handler();
+          }
+        }
+      } as any;
+
+      let responseBody = '';
+      const res = {
+        setHeader: () => {},
+        writeHead: () => {},
+        end: (data: string) => {
+          responseBody = data;
+          resolve(JSON.parse(responseBody));
+        }
+      } as any;
+
+      server.handleRequest(req, res);
+    });
+
+    const id2 = result2.id;
+
+    assert.notStrictEqual(id1, id2, 'IDs should be different for same-day duplicates');
+    
+    const tx1 = db.getTransaction(id1);
+    const tx2 = db.getTransaction(id2);
+    
+    assert.ok(tx1);
+    assert.ok(tx2);
+    assert.strictEqual(tx1?.date, tx2?.date);
+    assert.strictEqual(tx1?.merchant, tx2?.merchant);
+    assert.strictEqual(tx1?.chfAmount, tx2?.chfAmount);
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: delete twint transaction', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const tx: Transaction = {
+      id: 'twi-test123',
+      date: '2024-10-15',
+      source: 'twint',
+      merchant: 'Test Shop',
+      originalAmount: 25.50,
+      originalCurrency: 'CHF',
+      chfAmount: 25.50,
+      fileRowIndex: 0,
+      importedAt: new Date().toISOString(),
+    };
+
+    db.insertTransaction(tx);
+
+    const req = {
+      method: 'DELETE',
+      url: '/api/twint/twi-test123',
+      headers: {}
+    } as any;
+
+    let statusCode = 0;
+    let responseBody = '';
+    const res = {
+      setHeader: () => {},
+      writeHead: (code: number) => { statusCode = code; },
+      end: (data: string) => { responseBody = data; }
+    } as any;
+
+    server.handleRequest(req, res);
+
+    assert.strictEqual(statusCode, 200);
+    const result = JSON.parse(responseBody);
+    assert.strictEqual(result.success, true);
+
+    const deleted = db.getTransaction('twi-test123');
+    assert.strictEqual(deleted, undefined, 'Transaction should be deleted');
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: cannot delete non-twint transaction', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const tx: Transaction = {
+      id: 'bank-tx123',
+      date: '2024-10-15',
+      source: 'revolut',
+      merchant: 'Test Shop',
+      originalAmount: 25.50,
+      originalCurrency: 'CHF',
+      chfAmount: 25.50,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString(),
+    };
+
+    db.insertTransaction(tx);
+
+    const req = {
+      method: 'DELETE',
+      url: '/api/twint/bank-tx123',
+      headers: {}
+    } as any;
+
+    let statusCode = 0;
+    let responseBody = '';
+    const res = {
+      setHeader: () => {},
+      writeHead: (code: number) => { statusCode = code; },
+      end: (data: string) => { responseBody = data; }
+    } as any;
+
+    server.handleRequest(req, res);
+
+    assert.strictEqual(statusCode, 403, 'Should return 403 Forbidden');
+    assert.ok(responseBody.includes('Can only delete twint'));
+
+    const stillExists = db.getTransaction('bank-tx123');
+    assert.ok(stillExists, 'Non-twint transaction should not be deleted');
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: twint page HTML escapes user input', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const html = (server as any).getTwintPageHTML();
+    
+    assert.ok(html.includes('function escapeHtml(text)'), 'Page should have escapeHtml function');
+    assert.ok(html.includes('escapeHtml(tx.merchant)'), 'Page should escape merchant');
+    assert.ok(html.includes('escapeHtml(tx.description)'), 'Page should escape description');
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});

@@ -1,8 +1,9 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { DB } from './db.js';
-import { correctTransaction } from './categorize.js';
+import { correctTransaction, categorizeTransaction } from './categorize.js';
 import { loadCategories } from './categories.js';
 import { Transaction, Category } from './types.js';
+import { generateId } from './parsers/utils.js';
 
 function escapeHtml(text: string | undefined | null): string {
   if (!text) return '';
@@ -202,7 +203,7 @@ export class WebServer {
     
     // Enable CORS for local development
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
     if (req.method === 'OPTIONS') {
@@ -224,10 +225,18 @@ export class WebServer {
         this.handleCorrect(req, res);
       } else if (url.pathname === '/api/undo' && req.method === 'POST') {
         this.handleUndo(req, res);
+      } else if (url.pathname === '/api/twint' && req.method === 'POST') {
+        this.handleAddTwint(req, res);
+      } else if (url.pathname === '/api/twint' && req.method === 'GET') {
+        this.handleGetTwint(req, res);
+      } else if (url.pathname.startsWith('/api/twint/') && req.method === 'DELETE') {
+        this.handleDeleteTwint(req, res, url);
       } else if (url.pathname === '/review') {
         this.handleReviewPage(req, res);
       } else if (url.pathname === '/transactions') {
         this.handleTransactionsPage(req, res);
+      } else if (url.pathname === '/twint') {
+        this.handleTwintPage(req, res);
       } else if (url.pathname === '/' || url.pathname === '') {
         this.handleIndexPage(req, res);
       } else {
@@ -348,6 +357,127 @@ export class WebServer {
     res.end(JSON.stringify({ success }));
   }
 
+  private handleAddTwint(req: IncomingMessage, res: ServerResponse): void {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(body);
+        const { date, merchant, amount, note } = parsed;
+
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid or missing date (must be YYYY-MM-DD)' }));
+          return;
+        }
+
+        if (!merchant || typeof merchant !== 'string' || merchant.trim() === '') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid or missing merchant' }));
+          return;
+        }
+
+        if (typeof amount !== 'number' || amount <= 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid amount (must be positive number)' }));
+          return;
+        }
+
+        if (note !== undefined && typeof note !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid note (must be string)' }));
+          return;
+        }
+
+        const yearMonth = date.substring(0, 7);
+        const twintTransactions = this.db.getTransactionsByMonth(yearMonth).filter(t => t.source === 'twint');
+        
+        const occurrence = twintTransactions.filter(t => 
+          t.date === date && 
+          t.merchant === merchant.trim() && 
+          Math.abs(t.chfAmount - amount) < 0.01
+        ).length + 1;
+
+        const id = generateId('twi', date, merchant.trim(), amount, 0, occurrence);
+
+        const transaction: Transaction = {
+          id,
+          date,
+          source: 'twint',
+          merchant: merchant.trim(),
+          description: note?.trim(),
+          originalAmount: amount,
+          originalCurrency: 'CHF',
+          chfAmount: amount,
+          fileRowIndex: 0,
+          importedAt: new Date().toISOString(),
+        };
+
+        this.db.insertTransaction(transaction);
+
+        const allTransactions = this.db.getTransactionsByMonth(yearMonth);
+        const categorized = categorizeTransaction(transaction, this.db, allTransactions);
+        this.db.updateTransactionCategorization(
+          id,
+          categorized.category,
+          categorized.confidence,
+          categorized.explanation,
+          categorized.source,
+          categorized.anomalies
+        );
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, id }));
+      } catch (error: any) {
+        if (error instanceof SyntaxError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error.message }));
+        }
+      }
+    });
+  }
+
+  private handleGetTwint(req: IncomingMessage, res: ServerResponse): void {
+    const currentMonth = new Date().toISOString().substring(0, 7);
+    const transactions = this.db.getTransactionsByMonth(currentMonth);
+    const twintTransactions = transactions.filter(t => t.source === 'twint');
+    
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(twintTransactions));
+  }
+
+  private handleDeleteTwint(req: IncomingMessage, res: ServerResponse, url: URL): void {
+    const id = url.pathname.substring('/api/twint/'.length);
+    
+    if (!id) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing transaction id' }));
+      return;
+    }
+
+    const tx = this.db.getTransaction(id);
+    
+    if (!tx) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Transaction not found' }));
+      return;
+    }
+
+    if (tx.source !== 'twint') {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Can only delete twint transactions' }));
+      return;
+    }
+
+    this.db.deleteTransaction(id);
+    
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true }));
+  }
+
   private handleReviewPage(req: IncomingMessage, res: ServerResponse): void {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(this.getReviewPageHTML());
@@ -356,6 +486,11 @@ export class WebServer {
   private handleTransactionsPage(req: IncomingMessage, res: ServerResponse): void {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(this.getTransactionsPageHTML());
+  }
+
+  private handleTwintPage(req: IncomingMessage, res: ServerResponse): void {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(this.getTwintPageHTML());
   }
 
   private handleIndexPage(req: IncomingMessage, res: ServerResponse): void {
@@ -420,6 +555,12 @@ export class WebServer {
       <h2>All Transactions</h2>
       <p>View and search all transactions for the month.</p>
       <a href="/transactions?month=${currentMonth}" class="btn">View All</a>
+    </div>
+    
+    <div class="card">
+      <h2>Twint Prepaid</h2>
+      <p>Add Twint transactions manually (no export available).</p>
+      <a href="/twint" class="btn">Add Twint</a>
     </div>
   </div>
 </body>
@@ -1173,6 +1314,286 @@ export class WebServer {
       await loadCategories();
       await loadTransactions();
     })();
+  </script>
+</body>
+</html>`;
+  }
+
+  private getTwintPageHTML(): string {
+    const today = new Date().toISOString().substring(0, 10);
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Twint Prepaid</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      padding: 16px;
+    }
+    .container { max-width: 600px; margin: 0 auto; }
+    h1 { font-size: 24px; margin-bottom: 24px; color: #333; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+    .form-group input, .form-group textarea {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 16px;
+      font-family: inherit;
+    }
+    .form-group textarea {
+      resize: vertical;
+      min-height: 60px;
+    }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #007AFF;
+      color: white;
+    }
+    .btn:active { background: #0051D5; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
+    .message {
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+    .message.success { background: #d4edda; color: #155724; }
+    .message.error { background: #f8d7da; color: #721c24; }
+    .transactions-list {
+      margin-top: 32px;
+    }
+    .transactions-list h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #333;
+    }
+    .transaction {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .tx-info {
+      flex: 1;
+    }
+    .tx-date {
+      font-size: 12px;
+      color: #999;
+      margin-bottom: 4px;
+    }
+    .tx-merchant {
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 4px;
+    }
+    .tx-amount {
+      font-size: 14px;
+      color: #666;
+    }
+    .tx-note {
+      font-size: 12px;
+      color: #666;
+      font-style: italic;
+      margin-top: 4px;
+    }
+    .btn-delete {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #FF3B30;
+      color: white;
+      margin-left: 12px;
+    }
+    .btn-delete:active { background: #D12B1F; }
+    .empty {
+      text-align: center;
+      padding: 48px 16px;
+      color: #666;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Twint Prepaid</h1>
+    
+    <div class="card">
+      <div id="message"></div>
+      
+      <form id="twint-form">
+        <div class="form-group">
+          <label for="date">Date</label>
+          <input type="date" id="date" name="date" value="${today}" required>
+        </div>
+        
+        <div class="form-group">
+          <label for="merchant">Merchant</label>
+          <input type="text" id="merchant" name="merchant" placeholder="Shop name" required>
+        </div>
+        
+        <div class="form-group">
+          <label for="amount">Amount (CHF)</label>
+          <input type="number" id="amount" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+        </div>
+        
+        <div class="form-group">
+          <label for="note">Note (optional)</label>
+          <textarea id="note" name="note" placeholder="Optional description"></textarea>
+        </div>
+        
+        <button type="submit" class="btn" id="submit-btn">Add Transaction</button>
+      </form>
+    </div>
+    
+    <div class="transactions-list">
+      <h2>This Month's Twint Transactions</h2>
+      <div id="transactions"></div>
+    </div>
+  </div>
+
+  <script>
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function showMessage(text, type) {
+      const messageEl = document.getElementById('message');
+      messageEl.textContent = text;
+      messageEl.className = \`message \${type}\`;
+      setTimeout(() => {
+        messageEl.textContent = '';
+        messageEl.className = '';
+      }, 3000);
+    }
+
+    async function loadTransactions() {
+      try {
+        const res = await fetch('/api/twint');
+        const transactions = await res.json();
+        
+        const container = document.getElementById('transactions');
+        
+        if (transactions.length === 0) {
+          container.innerHTML = '<div class="empty">No Twint transactions this month</div>';
+          return;
+        }
+        
+        container.innerHTML = transactions.map(tx => \`
+          <div class="transaction">
+            <div class="tx-info">
+              <div class="tx-date">\${escapeHtml(tx.date)}</div>
+              <div class="tx-merchant">\${escapeHtml(tx.merchant)}</div>
+              <div class="tx-amount">CHF \${tx.chfAmount.toFixed(2)}</div>
+              \${tx.description ? \`<div class="tx-note">\${escapeHtml(tx.description)}</div>\` : ''}
+            </div>
+            <button class="btn-delete" onclick="deleteTransaction('\${escapeHtml(tx.id)}')">Delete</button>
+          </div>
+        \`).join('');
+      } catch (error) {
+        console.error('Failed to load transactions:', error);
+      }
+    }
+
+    async function deleteTransaction(id) {
+      if (!confirm('Delete this transaction?')) {
+        return;
+      }
+      
+      try {
+        const res = await fetch(\`/api/twint/\${id}\`, { method: 'DELETE' });
+        const data = await res.json();
+        
+        if (res.ok) {
+          showMessage('Transaction deleted', 'success');
+          await loadTransactions();
+        } else {
+          showMessage(data.error || 'Failed to delete', 'error');
+        }
+      } catch (error) {
+        showMessage('Network error', 'error');
+      }
+    }
+
+    document.getElementById('twint-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const submitBtn = document.getElementById('submit-btn');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Adding...';
+      
+      const formData = new FormData(e.target);
+      const data = {
+        date: formData.get('date'),
+        merchant: formData.get('merchant'),
+        amount: parseFloat(formData.get('amount')),
+        note: formData.get('note') || undefined
+      };
+      
+      try {
+        const res = await fetch('/api/twint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        
+        const result = await res.json();
+        
+        if (res.ok) {
+          showMessage('Transaction added successfully', 'success');
+          document.getElementById('merchant').value = '';
+          document.getElementById('amount').value = '';
+          document.getElementById('note').value = '';
+          await loadTransactions();
+        } else {
+          showMessage(result.error || 'Failed to add transaction', 'error');
+        }
+      } catch (error) {
+        showMessage('Network error', 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Add Transaction';
+      }
+    });
+
+    loadTransactions();
   </script>
 </body>
 </html>`;
