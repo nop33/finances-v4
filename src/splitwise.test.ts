@@ -497,6 +497,174 @@ describe('Splitwise import', () => {
     const tx = db.getTransaction('sw-1009');
     assert.strictEqual(tx, undefined);
   });
+
+  it('should handle month boundaries correctly in Europe/Zurich timezone', async () => {
+    const originalTZ = process.env.TZ;
+    process.env.TZ = 'Europe/Zurich';
+
+    try {
+      const mockData = {
+        currentUser: { user: { id: 123 } },
+        expenses: {
+          expenses: [
+            {
+              id: 3001,
+              description: 'October Expense',
+              date: '2024-10-15',
+              currency_code: 'CHF',
+              deleted_at: null,
+              payment: false,
+              users: [
+                { user_id: 123, paid_share: '0.00', owed_share: '30.00', net_balance: '30.00' },
+                { user_id: 456, paid_share: '30.00', owed_share: '0.00', net_balance: '-30.00' },
+              ],
+            },
+          ],
+        },
+      };
+
+      let capturedUrl = '';
+      const mockFetchWithCapture = (url: string | URL) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('get_expenses')) {
+          capturedUrl = urlStr;
+        }
+        return mockFetch(mockData)(url);
+      };
+
+      const result = await importSplitwiseExpenses(
+        db,
+        '2024-10',
+        'test-key',
+        mockFetchWithCapture as any
+      );
+
+      // Should use correct date boundaries
+      assert.ok(capturedUrl.includes('dated_after=2024-10-01'), 'dated_after should be 2024-10-01');
+      assert.ok(capturedUrl.includes('dated_before=2024-11-01'), 'dated_before should be 2024-11-01');
+
+      assert.strictEqual(result.imported, 1);
+    } finally {
+      if (originalTZ) {
+        process.env.TZ = originalTZ;
+      } else {
+        delete process.env.TZ;
+      }
+    }
+  });
+
+  it('should normalize Splitwise datetime to Europe/Zurich calendar date', async () => {
+    const mockData = {
+      currentUser: { user: { id: 123 } },
+      expenses: {
+        expenses: [
+          {
+            id: 3002,
+            description: 'Late Evening UTC',
+            date: '2024-10-15T23:30:00Z', // 23:30 UTC = next day (01:30) in Zurich
+            currency_code: 'CHF',
+            deleted_at: null,
+            payment: false,
+            users: [
+              { user_id: 123, paid_share: '0.00', owed_share: '40.00', net_balance: '40.00' },
+              { user_id: 456, paid_share: '40.00', owed_share: '0.00', net_balance: '-40.00' },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = await importSplitwiseExpenses(db, '2024-10', 'test-key', mockFetch(mockData));
+
+    assert.strictEqual(result.imported, 1);
+
+    const tx = db.getTransaction('sw-3002');
+    assert.ok(tx);
+    // Should store as 2024-10-16 (next day in Zurich timezone)
+    assert.strictEqual(tx.date, '2024-10-16');
+  });
+
+  it('should handle partial payer correctly (paid part, owes rest)', async () => {
+    const mockData = {
+      currentUser: { user: { id: 123 } },
+      expenses: {
+        expenses: [
+          {
+            id: 3003,
+            description: 'Partial Payment',
+            date: '2024-10-20',
+            currency_code: 'CHF',
+            deleted_at: null,
+            payment: false,
+            users: [
+              { user_id: 123, paid_share: '20.00', owed_share: '25.00', net_balance: '5.00' },
+              { user_id: 456, paid_share: '80.00', owed_share: '75.00', net_balance: '-5.00' },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = await importSplitwiseExpenses(db, '2024-10', 'test-key', mockFetch(mockData));
+
+    assert.strictEqual(result.imported, 1);
+
+    const tx = db.getTransaction('sw-3003');
+    assert.ok(tx);
+    // User paid 20 but owes 25, so net is +5 (owes 5 more)
+    assert.strictEqual(tx.originalAmount, 5.00);
+    assert.strictEqual(tx.chfAmount, 5.00);
+  });
+
+  it('should handle partial payer edge cases', async () => {
+    const mockData = {
+      currentUser: { user: { id: 123 } },
+      expenses: {
+        expenses: [
+          {
+            id: 3004,
+            description: 'Paid 100, owed 50',
+            date: '2024-10-21',
+            currency_code: 'CHF',
+            deleted_at: null,
+            payment: false,
+            users: [
+              { user_id: 123, paid_share: '100.00', owed_share: '50.00', net_balance: '-50.00' },
+              { user_id: 456, paid_share: '0.00', owed_share: '50.00', net_balance: '50.00' },
+            ],
+          },
+          {
+            id: 3005,
+            description: 'Paid 0, owed 25',
+            date: '2024-10-22',
+            currency_code: 'CHF',
+            deleted_at: null,
+            payment: false,
+            users: [
+              { user_id: 123, paid_share: '0.00', owed_share: '25.00', net_balance: '25.00' },
+              { user_id: 456, paid_share: '50.00', owed_share: '25.00', net_balance: '-25.00' },
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = await importSplitwiseExpenses(db, '2024-10', 'test-key', mockFetch(mockData));
+
+    assert.strictEqual(result.imported, 2);
+
+    const tx3004 = db.getTransaction('sw-3004');
+    assert.ok(tx3004);
+    // Paid 100, owed 50 => net -50 (owed to them)
+    assert.strictEqual(tx3004.originalAmount, -50.00);
+    assert.strictEqual(tx3004.chfAmount, -50.00);
+
+    const tx3005 = db.getTransaction('sw-3005');
+    assert.ok(tx3005);
+    // Paid 0, owed 25 => net +25 (owes them)
+    assert.strictEqual(tx3005.originalAmount, 25.00);
+    assert.strictEqual(tx3005.chfAmount, 25.00);
+  });
 });
 
 // Helper to create mock fetch function

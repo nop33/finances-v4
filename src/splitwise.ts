@@ -33,6 +33,22 @@ interface SplitwiseCurrentUser {
   id: number;
 }
 
+function normalizeToZurichDate(isoDatetime: string): string {
+  // Convert ISO datetime to Europe/Zurich calendar date
+  // Splitwise dates are like "2024-10-18T13:00:00Z" or "2024-10-18"
+  const date = new Date(isoDatetime);
+  
+  // Format in Europe/Zurich timezone
+  const zurichDateStr = date.toLocaleDateString('en-CA', {
+    timeZone: 'Europe/Zurich',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  
+  return zurichDateStr;
+}
+
 export async function importSplitwiseExpenses(
   db: DB,
   month: string,
@@ -46,16 +62,25 @@ export async function importSplitwiseExpenses(
   // Get current user
   const currentUser = await getCurrentUser(apiKey, httpFetch);
   
-  // Parse month and get date range
+  // Build date range from plain strings to avoid timezone shifts
   const [year, monthNum] = month.split('-').map(Number);
-  const startDate = new Date(year, monthNum - 1, 1);
-  const endDate = new Date(year, monthNum, 0); // Last day of month
+  const datedAfter = `${year}-${monthNum.toString().padStart(2, '0')}-01`;
   
-  const datedAfter = startDate.toISOString().split('T')[0];
-  const datedBefore = endDate.toISOString().split('T')[0];
+  // Calculate first day of next month
+  const nextMonth = monthNum === 12 ? 1 : monthNum + 1;
+  const nextYear = monthNum === 12 ? year + 1 : year;
+  const datedBefore = `${nextYear}-${nextMonth.toString().padStart(2, '0')}-01`;
 
   // Fetch all expenses for the month with pagination
   const expenses = await fetchAllExpenses(apiKey, datedAfter, datedBefore, httpFetch);
+
+  // Filter to only include expenses within the target month
+  // (to handle any boundary leakage from the API)
+  const targetMonthPrefix = `${year}-${monthNum.toString().padStart(2, '0')}-`;
+  const filteredExpenses = expenses.filter(expense => {
+    const expenseDate = normalizeToZurichDate(expense.date);
+    return expenseDate.startsWith(targetMonthPrefix);
+  });
 
   const fx = new FxConverter(db);
   const transactions: Transaction[] = [];
@@ -65,7 +90,7 @@ export async function importSplitwiseExpenses(
   let skipped = 0;
   let updated = 0;
 
-  for (const expense of expenses) {
+  for (const expense of filteredExpenses) {
     // Skip payments (settle-ups/repayments)
     if (expense.payment) {
       skipped++;
@@ -98,23 +123,20 @@ export async function importSplitwiseExpenses(
 
     const paidShare = parseFloat(userShare.paid_share);
     const owedShare = parseFloat(userShare.owed_share);
-    const netPosition = paidShare - owedShare;
+    
+    // Net position: owedShare - paidShare
+    // Positive = user owes money (expense)
+    // Negative = user is owed money (reduces spending)
+    const transactionAmount = owedShare - paidShare;
 
-    // Calculate the transaction amount based on net position
-    let transactionAmount: number;
-    if (netPosition > 0) {
-      // User paid more than they owe (others owe them)
-      // Store as NEGATIVE to reduce spending
-      transactionAmount = -(paidShare - owedShare);
-    } else if (netPosition < 0) {
-      // User owes someone else
-      // Store as positive expense
-      transactionAmount = owedShare;
-    } else {
-      // Net zero - skip
+    // Skip if net zero
+    if (transactionAmount === 0) {
       skipped++;
       continue;
     }
+
+    // Normalize date to Europe/Zurich timezone
+    const normalizedDate = normalizeToZurichDate(expense.date);
 
     // Convert to CHF if needed
     let chfAmount = transactionAmount;
@@ -126,7 +148,7 @@ export async function importSplitwiseExpenses(
       const conversion = await fx.convertToCHF(
         Math.abs(transactionAmount),
         expense.currency_code,
-        expense.date
+        normalizedDate
       );
       // Preserve sign
       chfAmount = transactionAmount < 0 ? -conversion.chfAmount : conversion.chfAmount;
@@ -140,7 +162,7 @@ export async function importSplitwiseExpenses(
 
     const transaction: Transaction = {
       id: txId,
-      date: expense.date,
+      date: normalizedDate,
       source: 'splitwise',
       merchant: expense.description,
       originalAmount: transactionAmount,
