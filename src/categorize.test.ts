@@ -493,3 +493,155 @@ test('categorizeMonth skips already reviewed transactions', () => {
     unlinkSync(dbPath);
   }
 });
+
+test('re-import preserves categorisation and reviewed flag', () => {
+  const dbPath = './test-reimport-preserve.sqlite';
+  const db = new DB(dbPath);
+
+  try {
+    const tx1: Transaction = {
+      id: 'test1',
+      date: '2024-10-01',
+      source: 'test',
+      merchant: 'Cafe',
+      originalAmount: 10,
+      originalCurrency: 'CHF',
+      chfAmount: 10,
+      fileRowIndex: 0,
+      importedAt: new Date().toISOString()
+    };
+
+    const tx2: Transaction = {
+      id: 'test2',
+      date: '2024-10-02',
+      source: 'test',
+      merchant: 'Store',
+      originalAmount: 20,
+      originalCurrency: 'CHF',
+      chfAmount: 20,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(tx1);
+    db.insertTransaction(tx2);
+
+    categorizeMonth(db, '2024-10');
+
+    correctTransaction(db, 'test1', 'Meals/Dining out');
+
+    const afterCorrection = db.getTransaction('test1');
+    assert.strictEqual(afterCorrection?.category, 'Meals/Dining out');
+    assert.strictEqual(afterCorrection?.reviewed, true);
+    assert.strictEqual(afterCorrection?.confidence, 1.0);
+
+    const tx2AfterCorrection = db.getTransaction('test2');
+    const tx2Category = tx2AfterCorrection?.category;
+
+    const reimportTx1: Transaction = {
+      id: 'test1',
+      date: '2024-10-01',
+      source: 'test',
+      merchant: 'Cafe',
+      originalAmount: 10.5,
+      originalCurrency: 'CHF',
+      chfAmount: 10.5,
+      fileRowIndex: 0,
+      importedAt: new Date().toISOString()
+    };
+
+    const reimportTx2: Transaction = {
+      id: 'test2',
+      date: '2024-10-02',
+      source: 'test',
+      merchant: 'Store',
+      originalAmount: 20,
+      originalCurrency: 'CHF',
+      chfAmount: 20,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(reimportTx1);
+    db.insertTransaction(reimportTx2);
+
+    const afterReimport = db.getTransaction('test1');
+    assert.strictEqual(afterReimport?.chfAmount, 10.5, 'Bank data should be updated');
+    assert.strictEqual(afterReimport?.category, 'Meals/Dining out', 'Category should be preserved');
+    assert.strictEqual(afterReimport?.reviewed, true, 'Reviewed flag should be preserved');
+    assert.strictEqual(afterReimport?.confidence, 1.0, 'Confidence should be preserved');
+
+    const tx2AfterReimport = db.getTransaction('test2');
+    assert.strictEqual(tx2AfterReimport?.category, tx2Category, 'Auto-categorisation should be preserved');
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('correction changing merchant category resets confidence', () => {
+  const dbPath = './test-correction-category-change.sqlite';
+  const db = new DB(dbPath);
+
+  try {
+    const tx1: Transaction = {
+      id: 'test1',
+      date: '2024-10-01',
+      source: 'test',
+      merchant: 'Test Merchant',
+      originalAmount: 10,
+      originalCurrency: 'CHF',
+      chfAmount: 10,
+      fileRowIndex: 0,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(tx1);
+
+    correctTransaction(db, 'test1', 'Meals/Snacks');
+    let memory = db.getMerchantMemory('test merchant');
+    assert.strictEqual(memory?.category, 'Meals/Snacks');
+    assert.strictEqual(memory?.timesUsed, 1);
+
+    const tx2: Transaction = {
+      id: 'test2',
+      date: '2024-10-02',
+      source: 'test',
+      merchant: 'Test Merchant',
+      originalAmount: 15,
+      originalCurrency: 'CHF',
+      chfAmount: 15,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(tx2);
+    correctTransaction(db, 'test2', 'Meals/Snacks');
+
+    memory = db.getMerchantMemory('test merchant');
+    assert.strictEqual(memory?.category, 'Meals/Snacks');
+    assert.strictEqual(memory?.timesUsed, 2);
+
+    const tx3: Transaction = {
+      id: 'test3',
+      date: '2024-10-03',
+      source: 'test',
+      merchant: 'Test Merchant',
+      originalAmount: 20,
+      originalCurrency: 'CHF',
+      chfAmount: 20,
+      fileRowIndex: 2,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(tx3);
+    correctTransaction(db, 'test3', 'Entertainment/Music');
+
+    memory = db.getMerchantMemory('test merchant');
+    assert.strictEqual(memory?.category, 'Entertainment/Music', 'Category should switch to new one');
+    assert.strictEqual(memory?.timesUsed, 1, 'Confidence should restart from 1 when category changes');
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});

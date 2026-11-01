@@ -69,42 +69,72 @@ export class DB {
   }
 
   insertTransaction(tx: Transaction): void {
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO transactions (
-        id, date, source, source_card, merchant, description,
-        original_amount, original_currency, chf_amount,
-        fx_rate, fx_rate_date, fx_conversion_failed,
-        file_row_index, imported_at,
-        category, confidence, explanation, categorization_source, reviewed,
-        new_merchant, unusual_amount, possible_duplicate, unconverted_fx
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const existing = this.getTransaction(tx.id);
+    
+    if (existing) {
+      const updateStmt = this.db.prepare(`
+        UPDATE transactions
+        SET date = ?, source = ?, source_card = ?, merchant = ?, description = ?,
+            original_amount = ?, original_currency = ?, chf_amount = ?,
+            fx_rate = ?, fx_rate_date = ?, fx_conversion_failed = ?,
+            file_row_index = ?, imported_at = ?
+        WHERE id = ?
+      `);
+      
+      updateStmt.run(
+        tx.date,
+        tx.source,
+        tx.sourceCard || null,
+        tx.merchant,
+        tx.description || null,
+        tx.originalAmount,
+        tx.originalCurrency,
+        tx.chfAmount,
+        tx.fxRate || null,
+        tx.fxRateDate || null,
+        tx.fxConversionFailed ? 1 : 0,
+        tx.fileRowIndex,
+        tx.importedAt,
+        tx.id
+      );
+    } else {
+      const insertStmt = this.db.prepare(`
+        INSERT INTO transactions (
+          id, date, source, source_card, merchant, description,
+          original_amount, original_currency, chf_amount,
+          fx_rate, fx_rate_date, fx_conversion_failed,
+          file_row_index, imported_at,
+          category, confidence, explanation, categorization_source, reviewed,
+          new_merchant, unusual_amount, possible_duplicate, unconverted_fx
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-    stmt.run(
-      tx.id,
-      tx.date,
-      tx.source,
-      tx.sourceCard || null,
-      tx.merchant,
-      tx.description || null,
-      tx.originalAmount,
-      tx.originalCurrency,
-      tx.chfAmount,
-      tx.fxRate || null,
-      tx.fxRateDate || null,
-      tx.fxConversionFailed ? 1 : 0,
-      tx.fileRowIndex,
-      tx.importedAt,
-      tx.category || null,
-      tx.confidence ?? null,
-      tx.explanation || null,
-      tx.categorizationSource || null,
-      tx.reviewed ? 1 : 0,
-      tx.newMerchant ? 1 : 0,
-      tx.unusualAmount ? 1 : 0,
-      tx.possibleDuplicate ? 1 : 0,
-      tx.unconvertedFx ? 1 : 0
-    );
+      insertStmt.run(
+        tx.id,
+        tx.date,
+        tx.source,
+        tx.sourceCard || null,
+        tx.merchant,
+        tx.description || null,
+        tx.originalAmount,
+        tx.originalCurrency,
+        tx.chfAmount,
+        tx.fxRate || null,
+        tx.fxRateDate || null,
+        tx.fxConversionFailed ? 1 : 0,
+        tx.fileRowIndex,
+        tx.importedAt,
+        tx.category || null,
+        tx.confidence ?? null,
+        tx.explanation || null,
+        tx.categorizationSource || null,
+        tx.reviewed ? 1 : 0,
+        tx.newMerchant ? 1 : 0,
+        tx.unusualAmount ? 1 : 0,
+        tx.possibleDuplicate ? 1 : 0,
+        tx.unconvertedFx ? 1 : 0
+      );
+    }
   }
 
   insertTransactions(transactions: Transaction[]): void {
@@ -223,15 +253,26 @@ export class DB {
 
   recordCorrection(normalizedMerchant: string, category: string): void {
     const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
-      INSERT INTO merchant_memory (normalized_merchant, category, times_used, last_used)
-      VALUES (?, ?, 1, ?)
-      ON CONFLICT(normalized_merchant) DO UPDATE SET
-        category = excluded.category,
-        times_used = times_used + 1,
-        last_used = excluded.last_used
-    `);
-    stmt.run(normalizedMerchant, category, now);
+    const existing = this.getMerchantMemory(normalizedMerchant);
+    
+    if (existing && existing.category !== category) {
+      const stmt = this.db.prepare(`
+        UPDATE merchant_memory
+        SET category = ?, times_used = 1, last_used = ?
+        WHERE normalized_merchant = ?
+      `);
+      stmt.run(category, now, normalizedMerchant);
+    } else {
+      const stmt = this.db.prepare(`
+        INSERT INTO merchant_memory (normalized_merchant, category, times_used, last_used)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(normalized_merchant) DO UPDATE SET
+          category = excluded.category,
+          times_used = times_used + 1,
+          last_used = excluded.last_used
+      `);
+      stmt.run(normalizedMerchant, category, now);
+    }
   }
 
   getMerchantMemory(normalizedMerchant: string): { category: string; timesUsed: number } | undefined {
