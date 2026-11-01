@@ -4,6 +4,16 @@ import { correctTransaction } from './categorize.js';
 import { loadCategories } from './categories.js';
 import { Transaction, Category } from './types.js';
 
+function escapeHtml(text: string | undefined | null): string {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 interface ReviewQueueOptions {
   month: string;
   mode: 'full' | 'exceptions';
@@ -283,13 +293,24 @@ export class WebServer {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { id } = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        const { id } = parsed;
+        if (!id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing id parameter' }));
+          return;
+        }
         this.acceptTransaction(id);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
       } catch (error: any) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: error.message }));
+        if (error instanceof SyntaxError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error.message }));
+        }
       }
     });
   }
@@ -299,13 +320,24 @@ export class WebServer {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { id, category } = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        const { id, category } = parsed;
+        if (!id || !category) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing id or category parameter' }));
+          return;
+        }
         this.correctTransactionViaWeb(id, category);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
       } catch (error: any) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: error.message }));
+        if (error instanceof SyntaxError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error.message }));
+        }
       }
     });
   }
@@ -579,6 +611,13 @@ export class WebServer {
   </div>
 
   <script>
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
     const urlParams = new URLSearchParams(window.location.search);
     const month = urlParams.get('month') || new Date().toISOString().substring(0, 7);
     const mode = urlParams.get('mode') || 'full';
@@ -625,21 +664,21 @@ export class WebServer {
       if (tx.fixedChanged) flags.push('Fixed Changed');
       
       const fxInfo = tx.originalCurrency !== 'CHF' && tx.fxRate
-        ? \`<div class="card-fx">\${tx.originalAmount.toFixed(2)} \${tx.originalCurrency} @ \${tx.fxRate.toFixed(4)}</div>\`
+        ? \`<div class="card-fx">\${tx.originalAmount.toFixed(2)} \${escapeHtml(tx.originalCurrency)} @ \${tx.fxRate.toFixed(4)}</div>\`
         : '';
       
       const card = document.createElement('div');
       card.className = 'card';
       card.innerHTML = \`
-        <div class="card-date">\${tx.date}</div>
-        <div class="card-merchant">\${tx.merchant}</div>
-        <div class="card-source">\${tx.source}\${tx.sourceCard ? ' • ' + tx.sourceCard : ''}</div>
+        <div class="card-date">\${escapeHtml(tx.date)}</div>
+        <div class="card-merchant">\${escapeHtml(tx.merchant)}</div>
+        <div class="card-source">\${escapeHtml(tx.source)}\${tx.sourceCard ? ' • ' + escapeHtml(tx.sourceCard) : ''}</div>
         <div class="card-amount">CHF \${tx.chfAmount.toFixed(2)}</div>
         \${fxInfo}
-        <div class="card-category">\${tx.category || 'Uncategorised'}</div>
+        <div class="card-category">\${escapeHtml(tx.category) || 'Uncategorised'}</div>
         <div class="card-confidence">Confidence: \${((tx.confidence || 0) * 100).toFixed(0)}%</div>
-        <div class="card-explanation">\${tx.explanation || ''}</div>
-        \${flags.length ? '<div class="flags">' + flags.map(f => \`<span class="flag">\${f}</span>\`).join('') + '</div>' : ''}
+        <div class="card-explanation">\${escapeHtml(tx.explanation)}</div>
+        \${flags.length ? '<div class="flags">' + flags.map(f => \`<span class="flag">\${escapeHtml(f)}</span>\`).join('') + '</div>' : ''}
         <div class="actions">
           <button class="btn btn-reject" onclick="rejectCard()">✗</button>
           <button class="btn btn-undo" onclick="undoLast()">Undo</button>
@@ -998,6 +1037,13 @@ export class WebServer {
   </div>
 
   <script>
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
     const urlParams = new URLSearchParams(window.location.search);
     const month = urlParams.get('month') || new Date().toISOString().substring(0, 7);
     
@@ -1037,14 +1083,14 @@ export class WebServer {
         if (tx.reviewed) flags.push('✓');
         
         return \`
-          <div class="transaction" onclick="selectTransaction('\${tx.id}')">
-            <div class="tx-date">\${tx.date} • \${tx.source}</div>
+          <div class="transaction" onclick="selectTransaction('\${escapeHtml(tx.id)}')">
+            <div class="tx-date">\${escapeHtml(tx.date)} • \${escapeHtml(tx.source)}</div>
             <div class="tx-header">
-              <div class="tx-merchant">\${tx.merchant}</div>
+              <div class="tx-merchant">\${escapeHtml(tx.merchant)}</div>
               <div class="tx-amount">CHF \${tx.chfAmount.toFixed(2)}</div>
             </div>
-            <div class="tx-category">\${tx.category || 'Uncategorised'}</div>
-            \${flags.length ? '<div class="tx-flags">' + flags.map(f => \`<span class="flag">\${f}</span>\`).join('') + '</div>' : ''}
+            <div class="tx-category">\${escapeHtml(tx.category) || 'Uncategorised'}</div>
+            \${flags.length ? '<div class="tx-flags">' + flags.map(f => \`<span class="flag">\${escapeHtml(f)}</span>\`).join('') + '</div>' : ''}
           </div>
         \`;
       }).join('');

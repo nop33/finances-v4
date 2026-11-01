@@ -567,3 +567,155 @@ test('WebServer: transaction list filtering by text', () => {
     delete process.env.CATEGORY_CONFIG;
   }
 });
+
+test('WebServer: HTML injection prevention in merchant names', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    // Transaction with malicious merchant name
+    const maliciousTx: Transaction = {
+      id: 'malicious',
+      date: '2024-10-15',
+      source: 'test',
+      merchant: '<script>alert("XSS")</script>Evil Shop',
+      originalAmount: 100,
+      originalCurrency: 'CHF',
+      chfAmount: 100,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString(),
+      category: 'Essentials/Food',
+      confidence: 0.8,
+      explanation: '<img src=x onerror=alert("XSS2")>',
+      categorizationSource: 'merchant_memory',
+      reviewed: false
+    };
+
+    db.insertTransaction(maliciousTx);
+
+    // Get transaction from API (returns JSON)
+    const transactions = server.getTransactionsList('2024-10');
+    
+    // Verify the data comes through as-is in JSON (escaping happens client-side)
+    assert.strictEqual(transactions[0].merchant, '<script>alert("XSS")</script>Evil Shop');
+    assert.strictEqual(transactions[0].explanation, '<img src=x onerror=alert("XSS2")>');
+
+    // Verify the HTML pages would escape it when rendered
+    // The review page HTML contains escapeHtml function
+    const reviewHTML = (server as any).getReviewPageHTML();
+    assert.ok(reviewHTML.includes('function escapeHtml(text)'), 'Review page should have escapeHtml function');
+    assert.ok(reviewHTML.includes('escapeHtml(tx.merchant)'), 'Review page should escape merchant');
+    assert.ok(reviewHTML.includes('escapeHtml(tx.explanation)'), 'Review page should escape explanation');
+
+    // The transactions list page HTML also contains escapeHtml function
+    const listHTML = (server as any).getTransactionsPageHTML();
+    assert.ok(listHTML.includes('function escapeHtml(text)'), 'List page should have escapeHtml function');
+    assert.ok(listHTML.includes('escapeHtml(tx.merchant)'), 'List page should escape merchant');
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: malformed JSON in POST requests returns 400', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+
+  writeFileSync(configPath, JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  }));
+
+  process.env.CATEGORY_CONFIG = configPath;
+
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    // Test accept endpoint with malformed JSON
+    const acceptReq = {
+      method: 'POST',
+      url: '/api/accept',
+      headers: {},
+      on: (event: string, handler: Function) => {
+        if (event === 'data') {
+          handler('{invalid json}');
+        } else if (event === 'end') {
+          handler();
+        }
+      }
+    } as any;
+
+    let acceptStatusCode = 0;
+    let acceptBody = '';
+    const acceptRes = {
+      setHeader: () => {},
+      writeHead: (code: number) => { acceptStatusCode = code; },
+      end: (data: string) => { acceptBody = data; }
+    } as any;
+
+    server.handleRequest(acceptReq, acceptRes);
+
+    // Give handlers time to execute
+    setTimeout(() => {
+      assert.strictEqual(acceptStatusCode, 400, 'Should return 400 for malformed JSON in accept');
+      assert.ok(acceptBody.includes('Invalid JSON'), 'Should include error message');
+    }, 100);
+
+    // Test correct endpoint with malformed JSON
+    const correctReq = {
+      method: 'POST',
+      url: '/api/correct',
+      headers: {},
+      on: (event: string, handler: Function) => {
+        if (event === 'data') {
+          handler('not json at all');
+        } else if (event === 'end') {
+          handler();
+        }
+      }
+    } as any;
+
+    let correctStatusCode = 0;
+    let correctBody = '';
+    const correctRes = {
+      setHeader: () => {},
+      writeHead: (code: number) => { correctStatusCode = code; },
+      end: (data: string) => { correctBody = data; }
+    } as any;
+
+    server.handleRequest(correctReq, correctRes);
+
+    setTimeout(() => {
+      assert.strictEqual(correctStatusCode, 400, 'Should return 400 for malformed JSON in correct');
+      assert.ok(correctBody.includes('Invalid JSON'), 'Should include error message');
+    }, 100);
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
