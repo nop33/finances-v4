@@ -1,0 +1,42 @@
+# Data directories - never commit real financial data
+data/
+uploads/
+exports/
+
+# Category configuration (contains personal data)
+expences-columns.json
+**/expences-columns.json
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+temp/

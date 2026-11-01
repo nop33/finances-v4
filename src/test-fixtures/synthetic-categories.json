@@ -1,0 +1,40 @@
+{
+  "columns": [
+    {"column": "A", "header": "Year", "group": null, "role": "year"},
+    {"column": "B", "header": "Date", "group": null, "role": "month_date"},
+    {"column": "C", "header": "Snacks", "group": "Meals", "role": "leaf_category"},
+    {"column": "D", "header": "Dining out", "group": "Meals", "role": "leaf_category"},
+    {"column": "E", "header": "Lodging", "group": "Housing", "role": "leaf_category"},
+    {"column": "F", "header": "Utilities", "group": "Housing", "role": "leaf_category"},
+    {"column": "G", "header": "Maintainence", "group": "Housing", "role": "leaf_category"},
+    {"column": "H", "header": "Transit pass", "group": "Movement", "role": "leaf_category"},
+    {"column": "I", "header": "Rideshare", "group": "Movement", "role": "leaf_category"},
+    {"column": "J", "header": "Coverage", "group": "Protection", "role": "leaf_category"},
+    {"column": "K", "header": "Software", "group": "Protection", "role": "leaf_category"},
+    {"column": "L", "header": "Other", "group": "Protection", "role": "leaf_category"},
+    {"column": "M", "header": "Tools", "group": "Work", "role": "leaf_category"},
+    {"column": "N", "header": "Mobile", "group": "Devices", "role": "leaf_category"},
+    {"column": "O", "header": "Other", "group": "Devices", "role": "leaf_category"},
+    {"column": "P", "header": "Music", "group": "Entertainment", "role": "leaf_category"},
+    {"column": "Q", "header": "Gaming", "group": "Entertainment", "role": "leaf_category"},
+    {"column": "R", "header": "Other", "group": "Entertainment", "role": "leaf_category"},
+    {"column": "S", "header": "Purchases", "group": "Shopping", "role": "leaf_category"},
+    {"column": "T", "header": "Flights", "group": "Travel", "role": "leaf_category"},
+    {"column": "U", "header": "Hotels", "group": "Travel", "role": "leaf_category"},
+    {"column": "V", "header": "Books", "group": "Learning", "role": "leaf_category"},
+    {"column": "W", "header": "Courses", "group": "Learning", "role": "leaf_category"},
+    {"column": "X", "header": "Other", "group": "Learning", "role": "leaf_category"},
+    {"column": "Y", "header": "Events", "group": "Fun", "role": "leaf_category"},
+    {"column": "Z", "header": "Other", "group": "Fun", "role": "leaf_category"},
+    {"column": "AA", "header": "Family support", "group": "Giving", "role": "leaf_category"},
+    {"column": "AB", "header": "Presents", "group": "Giving", "role": "leaf_category"},
+    {"column": "AC", "header": "Charity", "group": "Giving", "role": "leaf_category"},
+    {"column": "AD", "header": "Retirement", "group": "Savings", "role": "leaf_category"}
+  ],
+  "tierGroups": {
+    "need": ["Meals", "Housing", "Movement", "Protection", "Work", "Devices"],
+    "want": ["Entertainment", "Shopping", "Travel", "Learning", "Fun"],
+    "gifting": ["Giving"],
+    "savings": ["Savings"]
+  }
+}
