@@ -22,6 +22,9 @@ export interface Transaction {
   unusualAmount?: boolean;
   possibleDuplicate?: boolean;
   unconvertedFx?: boolean;
+  fixedMissing?: boolean;
+  fixedChanged?: boolean;
+  coveredByFixedBill?: string;
 }
 
 export interface Category {

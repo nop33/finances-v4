@@ -1,0 +1,39 @@
+{
+  "bills": [
+    {
+      "id": "test-monthly-rent",
+      "label": "Test monthly rent",
+      "category": "Living/Rent",
+      "monthlyAmount": 1000,
+      "merchantPatterns": ["landlord inc", "property mgmt"]
+    },
+    {
+      "id": "test-annual-insurance",
+      "label": "Test annual insurance",
+      "category": "Health/Insurance",
+      "monthlyAmount": 100,
+      "renewalMonth": 3,
+      "merchantPatterns": ["^insurance.*co$"]
+    },
+    {
+      "id": "test-no-pattern",
+      "label": "Test bill without patterns",
+      "category": "Tech/Phone",
+      "monthlyAmount": 50
+    },
+    {
+      "id": "test-active-from",
+      "label": "Test bill with activeFrom",
+      "category": "Living/Gym",
+      "monthlyAmount": 75,
+      "activeFrom": "2024-06"
+    },
+    {
+      "id": "test-active-until",
+      "label": "Test bill with activeUntil",
+      "category": "Movement/Parking",
+      "monthlyAmount": 25,
+      "activeUntil": "2024-05"
+    }
+  ]
+}
