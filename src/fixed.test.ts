@@ -355,3 +355,70 @@ test('applyFixedBills does not affect existing transactions without patterns', (
     unlinkSync(dbPath);
   }
 });
+
+test('month total excludes covered bank charges to prevent double-counting', () => {
+  const dbPath = './test-fixed-month-total.sqlite';
+  const db = new DB(dbPath);
+
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  process.env.FIXED_BILLS_CONFIG = './dist/test-fixtures/test-fixed-bills.json';
+
+  try {
+    const rentCharge: Transaction = {
+      id: 'bank1',
+      date: '2024-10-05',
+      source: 'neon',
+      merchant: 'Landlord Inc',
+      originalAmount: 1000,
+      originalCurrency: 'CHF',
+      chfAmount: 1000,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString()
+    };
+
+    const groceries: Transaction = {
+      id: 'bank2',
+      date: '2024-10-10',
+      source: 'neon',
+      merchant: 'Grocery Store',
+      originalAmount: 150,
+      originalCurrency: 'CHF',
+      chfAmount: 150,
+      fileRowIndex: 2,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(rentCharge);
+    db.insertTransaction(groceries);
+
+    applyFixedBills(db, '2024-10');
+
+    const total = db.getMonthTotal('2024-10');
+
+    const allTx = db.getTransactionsByMonth('2024-10');
+    const rentFixed = allTx.find(t => t.source === 'fixed' && t.merchant === 'Test monthly rent');
+    const rentBank = allTx.find(t => t.id === 'bank1');
+    const groceriesTx = allTx.find(t => t.id === 'bank2');
+
+    assert.ok(rentFixed, 'Fixed rent transaction should exist');
+    assert.ok(rentBank, 'Bank rent charge should exist');
+    assert.ok(groceriesTx, 'Groceries transaction should exist');
+
+    assert.strictEqual(rentBank.coveredByFixedBill, 'Test monthly rent', 'Rent charge should be marked as covered');
+
+    const allFixed = allTx.filter(t => t.source === 'fixed');
+    const totalFixed = allFixed.reduce((sum, t) => sum + t.chfAmount, 0);
+    
+    const expectedTotal = totalFixed + groceriesTx.chfAmount;
+
+    assert.strictEqual(total, expectedTotal, 
+      `Total should be ${expectedTotal} (fixed bills ${totalFixed} + groceries ${groceriesTx.chfAmount}), excluding covered bank charge ${rentBank.chfAmount}`);
+
+    const totalWithoutExclusion = totalFixed + rentBank.chfAmount + groceriesTx.chfAmount;
+    assert.notStrictEqual(total, totalWithoutExclusion, 
+      `Total should NOT be ${totalWithoutExclusion} (would include double-counted rent charge)`);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});

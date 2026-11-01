@@ -11,7 +11,7 @@
       "id": "example-insurance",
       "label": "Example insurance",
       "category": "Health/Insurance",
-      "monthlyAmount": 362.2833333333,
+      "monthlyAmount": 100.25,
       "renewalMonth": 1,
       "merchantPatterns": ["example insurance co"]
     },

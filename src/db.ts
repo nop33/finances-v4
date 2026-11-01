@@ -413,6 +413,17 @@ export class DB {
     );
   }
 
+  getMonthTotal(yearMonth: string): number {
+    const stmt = this.db.prepare(`
+      SELECT SUM(chf_amount) as total
+      FROM transactions
+      WHERE date LIKE ? || '%'
+        AND covered_by_fixed_bill IS NULL
+    `);
+    const result = stmt.get(yearMonth) as { total: number | null };
+    return result.total || 0;
+  }
+
   close(): void {
     this.db.close();
   }
