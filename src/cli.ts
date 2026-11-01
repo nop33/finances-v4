@@ -3,6 +3,7 @@
 import { DB } from './db.js';
 import { parseFile } from './parsers/index.js';
 import { importTransactions } from './import.js';
+import { categorizeMonth, correctTransaction } from './categorize.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 
@@ -11,8 +12,10 @@ const command = args[0];
 
 if (!command) {
   console.log(`Usage:
-  finances import <file1> [file2 ...]    Import transaction files
-  finances list --month YYYY-MM          List transactions for a month
+  finances import <file1> [file2 ...]           Import transaction files
+  finances list --month YYYY-MM                 List transactions for a month
+  finances categorise --month YYYY-MM           Auto-categorise transactions for a month
+  finances correct <txId> <category>            Correct a transaction's category
 `);
   process.exit(0);
 }
@@ -68,6 +71,43 @@ try {
 
     const total = transactions.reduce((sum, tx) => sum + tx.chfAmount, 0);
     console.log(`\nTotal: CHF ${total.toFixed(2)}`);
+  } else if (command === 'categorise') {
+    const monthIndex = args.indexOf('--month');
+    if (monthIndex === -1 || !args[monthIndex + 1]) {
+      console.error('Error: --month YYYY-MM required');
+      process.exit(1);
+    }
+
+    const month = args[monthIndex + 1];
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      console.error('Error: Month must be in YYYY-MM format');
+      process.exit(1);
+    }
+
+    console.log(`Categorising transactions for ${month}...`);
+    categorizeMonth(db, month);
+
+    const transactions = db.getTransactionsByMonth(month);
+    const categorised = transactions.filter(t => t.category);
+    console.log(`Categorised ${categorised.length} of ${transactions.length} transactions`);
+  } else if (command === 'correct') {
+    if (args.length < 3) {
+      console.error('Error: Usage: finances correct <txId> <category>');
+      process.exit(1);
+    }
+
+    const txId = args[1];
+    const category = args[2];
+
+    const tx = db.getTransaction(txId);
+    if (!tx) {
+      console.error(`Error: Transaction ${txId} not found`);
+      process.exit(1);
+    }
+
+    console.log(`Correcting transaction ${txId} to category ${category}...`);
+    correctTransaction(db, txId, category);
+    console.log(`Done. Merchant memory updated.`);
   } else {
     console.error(`Unknown command: ${command}`);
     process.exit(1);
