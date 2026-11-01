@@ -11,7 +11,8 @@
     "build": "tsc && mkdir -p dist/test-fixtures && cp src/test-fixtures/*.json dist/test-fixtures/",
     "dev": "tsc --watch",
     "pretest": "npm run build",
-    "test": "node --test --experimental-test-coverage dist/*.test.js dist/**/*.test.js",
+    "test": "node --test dist/*.test.js dist/**/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage dist/*.test.js dist/**/*.test.js",
     "cli": "node dist/cli.js"
   },
   "keywords": ["finance", "expenses", "tracking"],

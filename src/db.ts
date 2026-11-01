@@ -234,6 +234,11 @@ export class DB {
     };
   }
 
+  deleteTransaction(id: string): void {
+    const stmt = this.db.prepare('DELETE FROM transactions WHERE id = ?');
+    stmt.run(id);
+  }
+
   updateTransactionCategorization(
     id: string,
     category: string,
