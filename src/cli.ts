@@ -5,6 +5,7 @@ import { parseFile } from './parsers/index.js';
 import { importTransactions } from './import.js';
 import { categorizeMonth, correctTransaction } from './categorize.js';
 import { applyFixedBills } from './fixed.js';
+import { importSplitwiseExpenses } from './splitwise.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 
@@ -14,6 +15,7 @@ const command = args[0];
 if (!command) {
   console.log(`Usage:
   finances import <file1> [file2 ...]           Import transaction files
+  finances splitwise import --month YYYY-MM     Import Splitwise expenses for a month
   finances list --month YYYY-MM                 List transactions for a month
   finances categorise --month YYYY-MM           Auto-categorise transactions for a month
   finances correct <txId> <category>            Correct a transaction's category
@@ -143,6 +145,32 @@ try {
     const total = db.getMonthTotal(month);
     console.log(`\nTotal for ${month}: CHF ${total.toFixed(2)}`);
     console.log(`(Excludes bank charges covered by fixed bills)\n`);
+  } else if (command === 'splitwise' && args[1] === 'import') {
+    const monthIndex = args.indexOf('--month');
+    if (monthIndex === -1 || !args[monthIndex + 1]) {
+      console.error('Error: --month YYYY-MM required');
+      process.exit(1);
+    }
+
+    const month = args[monthIndex + 1];
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      console.error('Error: Month must be in YYYY-MM format');
+      process.exit(1);
+    }
+
+    const apiKey = process.env.SPLITWISE_API_KEY;
+    if (!apiKey) {
+      console.error('Error: SPLITWISE_API_KEY environment variable is required');
+      console.error('Set it with: export SPLITWISE_API_KEY=your_api_key');
+      process.exit(1);
+    }
+
+    console.log(`Importing Splitwise expenses for ${month}...`);
+    const result = await importSplitwiseExpenses(db, month, apiKey);
+    console.log(`Import complete:`);
+    console.log(`  Imported: ${result.imported} new expenses`);
+    console.log(`  Updated: ${result.updated} existing expenses`);
+    console.log(`  Skipped: ${result.skipped} (payments/deleted/zero net)`);
   } else {
     console.error(`Unknown command: ${command}`);
     process.exit(1);
