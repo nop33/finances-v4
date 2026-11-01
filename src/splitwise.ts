@@ -1,6 +1,9 @@
 import { DB } from './db.js';
 import { FxConverter } from './fx.js';
 import { Transaction } from './types.js';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
+import Papa from 'papaparse';
 
 interface SplitwiseUser {
   id: number;
@@ -33,6 +36,16 @@ interface SplitwiseCurrentUser {
   id: number;
 }
 
+interface SplitwiseExpenseData {
+  id: string;
+  description: string;
+  date: string;
+  currency: string;
+  amount: number;
+  isPayment: boolean;
+  isDeleted: boolean;
+}
+
 function normalizeToZurichDate(isoDatetime: string): string {
   // Convert ISO datetime to Europe/Zurich calendar date
   // Splitwise dates are like "2024-10-18T13:00:00Z" or "2024-10-18"
@@ -47,6 +60,95 @@ function normalizeToZurichDate(isoDatetime: string): string {
   });
   
   return zurichDateStr;
+}
+
+async function bookSplitwiseExpense(
+  db: DB,
+  fx: FxConverter,
+  expenseData: SplitwiseExpenseData,
+  stats: { imported: number; skipped: number; updated: number }
+): Promise<void> {
+  const importedAt = new Date().toISOString();
+  
+  // Skip payments (settle-ups/repayments)
+  if (expenseData.isPayment) {
+    stats.skipped++;
+    return;
+  }
+
+  // Handle deleted expenses
+  if (expenseData.isDeleted) {
+    const existing = db.getTransaction(expenseData.id);
+    
+    if (existing) {
+      const updatedTx: Transaction = {
+        ...existing,
+        chfAmount: 0,
+        originalAmount: 0,
+        importedAt,
+      };
+      db.insertTransaction(updatedTx);
+      stats.updated++;
+    }
+    stats.skipped++;
+    return;
+  }
+
+  // Skip if net zero
+  if (expenseData.amount === 0) {
+    stats.skipped++;
+    return;
+  }
+
+  // Convert to CHF if needed
+  let chfAmount = expenseData.amount;
+  let fxRate: number | undefined;
+  let fxRateDate: string | undefined;
+  let fxConversionFailed = false;
+
+  if (expenseData.currency !== 'CHF') {
+    const conversion = await fx.convertToCHF(
+      Math.abs(expenseData.amount),
+      expenseData.currency,
+      expenseData.date
+    );
+    // Preserve sign
+    chfAmount = expenseData.amount < 0 ? -conversion.chfAmount : conversion.chfAmount;
+    fxRate = conversion.rate;
+    fxRateDate = conversion.rateDate;
+    fxConversionFailed = conversion.failed || false;
+  }
+
+  const existing = db.getTransaction(expenseData.id);
+
+  const transaction: Transaction = {
+    id: expenseData.id,
+    date: expenseData.date,
+    source: 'splitwise',
+    merchant: expenseData.description,
+    originalAmount: expenseData.amount,
+    originalCurrency: expenseData.currency,
+    chfAmount,
+    fxRate,
+    fxRateDate,
+    fxConversionFailed,
+    fileRowIndex: 0,
+    importedAt,
+    // Preserve existing categorization on re-import
+    category: existing?.category,
+    confidence: existing?.confidence,
+    explanation: existing?.explanation,
+    categorizationSource: existing?.categorizationSource,
+    reviewed: existing?.reviewed,
+  };
+
+  db.insertTransaction(transaction);
+  
+  if (existing) {
+    stats.updated++;
+  } else {
+    stats.imported++;
+  }
 }
 
 export async function importSplitwiseExpenses(
@@ -83,41 +185,23 @@ export async function importSplitwiseExpenses(
   });
 
   const fx = new FxConverter(db);
-  const transactions: Transaction[] = [];
-  const importedAt = new Date().toISOString();
-  
-  let imported = 0;
-  let skipped = 0;
-  let updated = 0;
+  const stats = { imported: 0, skipped: 0, updated: 0 };
 
   for (const expense of filteredExpenses) {
-    // Skip payments (settle-ups/repayments)
-    if (expense.payment) {
-      skipped++;
-      continue;
-    }
-
     // Find user's involvement in this expense
     const userShare = expense.users.find(u => u.user_id === currentUser.id);
     
-    // Skip if deleted or user not involved
-    if (expense.deleted_at || !userShare) {
-      const txId = `sw-${expense.id}`;
-      const existing = db.getTransaction(txId);
-      
-      if (existing) {
-        // Mark as deleted/uninvolved by setting chfAmount to 0
-        // This way it doesn't affect totals but remains in the database
-        const updatedTx: Transaction = {
-          ...existing,
-          chfAmount: 0,
-          originalAmount: 0,
-          importedAt,
-        };
-        db.insertTransaction(updatedTx);
-        updated++;
-      }
-      skipped++;
+    // Handle as deleted if user not involved
+    if (!userShare) {
+      await bookSplitwiseExpense(db, fx, {
+        id: `sw-${expense.id}`,
+        description: expense.description,
+        date: normalizeToZurichDate(expense.date),
+        currency: expense.currency_code,
+        amount: 0,
+        isPayment: false,
+        isDeleted: true,
+      }, stats);
       continue;
     }
 
@@ -129,68 +213,18 @@ export async function importSplitwiseExpenses(
     // Negative = user is owed money (reduces spending)
     const transactionAmount = owedShare - paidShare;
 
-    // Skip if net zero
-    if (transactionAmount === 0) {
-      skipped++;
-      continue;
-    }
-
-    // Normalize date to Europe/Zurich timezone
-    const normalizedDate = normalizeToZurichDate(expense.date);
-
-    // Convert to CHF if needed
-    let chfAmount = transactionAmount;
-    let fxRate: number | undefined;
-    let fxRateDate: string | undefined;
-    let fxConversionFailed = false;
-
-    if (expense.currency_code !== 'CHF') {
-      const conversion = await fx.convertToCHF(
-        Math.abs(transactionAmount),
-        expense.currency_code,
-        normalizedDate
-      );
-      // Preserve sign
-      chfAmount = transactionAmount < 0 ? -conversion.chfAmount : conversion.chfAmount;
-      fxRate = conversion.rate;
-      fxRateDate = conversion.rateDate;
-      fxConversionFailed = conversion.failed || false;
-    }
-
-    const txId = `sw-${expense.id}`;
-    const existing = db.getTransaction(txId);
-
-    const transaction: Transaction = {
-      id: txId,
-      date: normalizedDate,
-      source: 'splitwise',
-      merchant: expense.description,
-      originalAmount: transactionAmount,
-      originalCurrency: expense.currency_code,
-      chfAmount,
-      fxRate,
-      fxRateDate,
-      fxConversionFailed,
-      fileRowIndex: 0,
-      importedAt,
-      // Preserve existing categorization on re-import
-      category: existing?.category,
-      confidence: existing?.confidence,
-      explanation: existing?.explanation,
-      categorizationSource: existing?.categorizationSource,
-      reviewed: existing?.reviewed,
-    };
-
-    db.insertTransaction(transaction);
-    
-    if (existing) {
-      updated++;
-    } else {
-      imported++;
-    }
+    await bookSplitwiseExpense(db, fx, {
+      id: `sw-${expense.id}`,
+      description: expense.description,
+      date: normalizeToZurichDate(expense.date),
+      currency: expense.currency_code,
+      amount: transactionAmount,
+      isPayment: expense.payment,
+      isDeleted: !!expense.deleted_at,
+    }, stats);
   }
 
-  return { imported, skipped, updated };
+  return stats;
 }
 
 async function getCurrentUser(
@@ -254,4 +288,162 @@ async function fetchAllExpenses(
   }
 
   return allExpenses;
+}
+
+export async function importSplitwiseCsvFiles(
+  db: DB,
+  month: string,
+  meName: string,
+  files: string[]
+): Promise<{ imported: number; skipped: number; updated: number }> {
+  if (!meName) {
+    throw new Error('--me parameter or SPLITWISE_ME environment variable is required');
+  }
+
+  const [year, monthNum] = month.split('-').map(Number);
+  const targetMonthPrefix = `${year}-${monthNum.toString().padStart(2, '0')}-`;
+
+  const fx = new FxConverter(db);
+  const stats = { imported: 0, skipped: 0, updated: 0 };
+
+  for (const file of files) {
+    let content = readFileSync(file, 'utf-8');
+    
+    // Remove UTF-8 BOM if present
+    if (content.charCodeAt(0) === 0xFEFF) {
+      content = content.substring(1);
+    }
+
+    // Parse CSV with papaparse (handles CRLF, quoted fields, escaped quotes)
+    const parsed = Papa.parse(content, {
+      skipEmptyLines: true,
+      delimiter: ',',
+    });
+
+    if (!parsed.data || parsed.data.length === 0) {
+      continue;
+    }
+
+    const rows = parsed.data as string[][];
+    
+    // Find header row (first row with "Date" or "Datum" in first cell)
+    let headerIndex = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const firstCell = rows[i][0]?.trim() || '';
+      if (firstCell === 'Date' || firstCell === 'Datum') {
+        headerIndex = i;
+        break;
+      }
+    }
+
+    if (headerIndex === -1) {
+      throw new Error(`No header row found in ${file}. Expected first cell to be "Date" or "Datum".`);
+    }
+
+    const header = rows[headerIndex].map(h => h.trim());
+    
+    // Find column indices (support English and German)
+    const dateIndex = findColumn(header, ['Date', 'Datum']);
+    const descIndex = findColumn(header, ['Description', 'Beschreibung']);
+    const categoryIndex = findColumn(header, ['Category', 'Kategorie']);
+    const costIndex = findColumn(header, ['Cost', 'Kosten']);
+    const currencyIndex = findColumn(header, ['Currency', 'Währung']);
+    const meIndex = header.indexOf(meName);
+
+    if (dateIndex === -1 || descIndex === -1 || categoryIndex === -1 || costIndex === -1 || currencyIndex === -1) {
+      throw new Error(`CSV header missing required columns. Found: ${header.join(', ')}`);
+    }
+
+    if (meIndex === -1) {
+      throw new Error(`Column "${meName}" not found in CSV header. Available columns: ${header.join(', ')}`);
+    }
+
+    // Track identical rows for stable ID generation
+    const rowCounts = new Map<string, number>();
+    
+    // Generate a file key for stable IDs across re-imports
+    const fileKey = createHash('sha256')
+      .update(file)
+      .digest('hex')
+      .substring(0, 8);
+
+    // Process data rows (after header)
+    for (let i = headerIndex + 1; i < rows.length; i++) {
+      const fields = rows[i];
+      
+      // Trim all fields
+      const date = fields[dateIndex]?.trim() || '';
+      const description = fields[descIndex]?.trim() || '';
+      const category = fields[categoryIndex]?.trim() || '';
+      const cost = fields[costIndex]?.trim() || '';
+      const currency = fields[currencyIndex]?.trim() || '';
+      const meValue = fields[meIndex]?.trim() || '';
+
+      // Skip summary rows (Total balance / Gesamtbilanz)
+      if (description === 'Total balance' || description === 'Gesamtbilanz') {
+        stats.skipped++;
+        continue;
+      }
+
+      // Skip payment rows (Payment / Zahlung)
+      if (category === 'Payment' || category === 'Zahlung') {
+        stats.skipped++;
+        continue;
+      }
+
+      // Skip rows outside target month
+      if (!date.startsWith(targetMonthPrefix)) {
+        stats.skipped++;
+        continue;
+      }
+
+      // Skip zero or empty net
+      if (!meValue || meValue === '0' || meValue === '0.00') {
+        stats.skipped++;
+        continue;
+      }
+
+      // Parse user's net balance
+      const meNet = parseFloat(meValue);
+      if (isNaN(meNet) || meNet === 0) {
+        stats.skipped++;
+        continue;
+      }
+
+      // User's amount is negative of their net balance
+      // If user's net is +100 (they paid/are owed), amount is -100
+      // If user's net is -47.77 (they owe), amount is +47.77
+      const amount = -meNet;
+
+      // Generate stable ID
+      const rowKey = `${date}|${description}|${cost}|${currency}`;
+      const occurrence = rowCounts.get(rowKey) || 0;
+      rowCounts.set(rowKey, occurrence + 1);
+
+      const idData = `${date}|${description}|${cost}|${currency}|${fileKey}|${occurrence}`;
+      const id = `sw-csv-${createHash('sha256').update(idData).digest('hex').substring(0, 16)}`;
+
+      await bookSplitwiseExpense(db, fx, {
+        id,
+        description,
+        date,
+        currency,
+        amount,
+        isPayment: false,
+        isDeleted: false,
+      }, stats);
+    }
+  }
+
+  return stats;
+}
+
+function findColumn(header: string[], names: string[]): number {
+  for (const name of names) {
+    const index = header.indexOf(name);
+    if (index !== -1) {
+      return index;
+    }
+  }
+  return -1;
 }
