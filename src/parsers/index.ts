@@ -5,6 +5,7 @@ import { parseCembra } from './cembra.js';
 import { parseSwisscard } from './swisscard.js';
 import { parseNeon } from './neon.js';
 import { parseRevolutCsv, parseRevolutXlsx } from './revolut.js';
+import { parseSbb } from './sbb.js';
 
 export function parseFile(filepath: string): ParsedTransaction[] {
   let content: string | Buffer;
@@ -28,6 +29,8 @@ export function parseFile(filepath: string): ParsedTransaction[] {
       return parseRevolutCsv(content as string);
     case 'revolut-xlsx':
       return parseRevolutXlsx(content as Buffer);
+    case 'sbb':
+      return parseSbb(content as string);
     default:
       throw new Error(`Unknown format for file: ${filepath}`);
   }
