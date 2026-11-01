@@ -1,6 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { parseSbb } from './sbb.js';
+import { DB } from '../db.js';
+import { importTransactions } from '../import.js';
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 describe('SBB parser', () => {
   it('should parse plural journeys receipt with Total', () => {
@@ -40,11 +45,12 @@ CHF 7.40`;
 
     assert.strictEqual(transactions.length, 1);
     assert.strictEqual(transactions[0].date, '2025-02-03');
-    assert.strictEqual(transactions[0].merchant, 'SBB EasyRide - ZVV Day Pass (calendar day) [100000000001]');
+    assert.strictEqual(transactions[0].merchant, 'SBB EasyRide - ZVV Day Pass (calendar day)');
     assert.strictEqual(transactions[0].description, 'Half Fare Travelcard PLUS');
     assert.strictEqual(transactions[0].originalAmount, 7.40);
     assert.strictEqual(transactions[0].originalCurrency, 'CHF');
     assert.strictEqual(transactions[0].source, 'sbb');
+    assert.ok(transactions[0].id, 'Should have an ID');
   });
 
   it('should parse singular journey receipt', () => {
@@ -70,7 +76,7 @@ CHF 12.60`;
 
     assert.strictEqual(transactions.length, 1);
     assert.strictEqual(transactions[0].date, '2025-03-15');
-    assert.strictEqual(transactions[0].merchant, 'SBB EasyRide [100000000002]');
+    assert.strictEqual(transactions[0].merchant, 'SBB EasyRide');
     assert.strictEqual(transactions[0].originalAmount, 12.60);
   });
 
@@ -153,7 +159,7 @@ CHF 15.20`;
 
     assert.strictEqual(transactions.length, 1);
     assert.strictEqual(transactions[0].date, '2025-02-03');
-    assert.strictEqual(transactions[0].merchant, 'SBB EasyRide [100000000004]');
+    assert.strictEqual(transactions[0].merchant, 'SBB EasyRide');
     assert.strictEqual(transactions[0].description, 'Halbtax-Abo PLUS');
     assert.strictEqual(transactions[0].originalAmount, 15.20);
   });
@@ -174,9 +180,46 @@ CHF 15.20`;
     assert.strictEqual(transactions[0].originalAmount, 7.40);
   });
 
-  it('should generate stable merchant name for idempotent import', () => {
+  it('should generate same merchant for same item, different IDs for different orders', () => {
+    const receipt1 = `+++ EasyRide purchase receipt – your journeys on 03.02.2025
+Order number 100000000001
+
+Payment method
+Half Fare Travelcard PLUS
+
+Amount
+CHF 7.40
+
+Item
+
+ZVV Day Pass (calendar day)`;
+
+    const receipt2 = `+++ EasyRide purchase receipt – your journeys on 04.02.2025
+Order number 100000000002
+
+Payment method
+Half Fare Travelcard PLUS
+
+Amount
+CHF 7.40
+
+Item
+
+ZVV Day Pass (calendar day)`;
+
+    const tx1 = parseSbb(receipt1);
+    const tx2 = parseSbb(receipt2);
+
+    // Same item = same merchant name (for merchant memory)
+    assert.strictEqual(tx1[0].merchant, tx2[0].merchant);
+    assert.strictEqual(tx1[0].merchant, 'SBB EasyRide - ZVV Day Pass (calendar day)');
+
+    // Different order numbers = different IDs (no duplicates)
+    assert.notStrictEqual(tx1[0].id, tx2[0].id);
+  });
+
+  it('should generate stable ID for idempotent re-import', () => {
     const receipt = `+++ EasyRide purchase receipt – your journeys on 03.02.2025
-...
 Order number 100000000001
 
 Payment method
@@ -190,16 +233,55 @@ Item
 ZVV Day Pass (calendar day)`;
 
     // Parse twice
-    const transactions1 = parseSbb(receipt);
-    const transactions2 = parseSbb(receipt);
+    const tx1 = parseSbb(receipt);
+    const tx2 = parseSbb(receipt);
 
-    // Should generate identical merchant names (which will result in same ID)
-    assert.strictEqual(transactions1[0].merchant, transactions2[0].merchant);
-    assert.strictEqual(transactions1[0].merchant, 'SBB EasyRide - ZVV Day Pass (calendar day) [100000000001]');
+    // Should generate identical IDs (for upsert behavior)
+    assert.strictEqual(tx1[0].id, tx2[0].id);
     
     // All fields should be identical
-    assert.strictEqual(transactions1[0].date, transactions2[0].date);
-    assert.strictEqual(transactions1[0].originalAmount, transactions2[0].originalAmount);
-    assert.strictEqual(transactions1[0].source, transactions2[0].source);
+    assert.strictEqual(tx1[0].merchant, tx2[0].merchant);
+    assert.strictEqual(tx1[0].date, tx2[0].date);
+    assert.strictEqual(tx1[0].originalAmount, tx2[0].originalAmount);
+  });
+
+  it('should update on re-import, not duplicate', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'sbb-test-'));
+    const dbPath = join(tempDir, 'test.db');
+    const db = new DB(dbPath);
+
+    try {
+      const receipt = `+++ EasyRide purchase receipt – your journeys on 03.02.2025
+Order number 100000000001
+
+Payment method
+Half Fare Travelcard PLUS
+
+Amount
+CHF 7.40
+
+Item
+
+ZVV Day Pass (calendar day)`;
+
+      const parsed = parseSbb(receipt);
+      
+      // First import
+      await importTransactions(db, parsed);
+      let allTxs = db.getTransactionsByMonth('2025-02');
+      assert.strictEqual(allTxs.length, 1);
+      const firstId = allTxs[0].id;
+
+      // Re-import same receipt
+      await importTransactions(db, parsed);
+      allTxs = db.getTransactionsByMonth('2025-02');
+      
+      // Should still be 1 transaction (updated, not duplicated)
+      assert.strictEqual(allTxs.length, 1);
+      assert.strictEqual(allTxs[0].id, firstId);
+    } finally {
+      db.close();
+      rmSync(tempDir, { recursive: true });
+    }
   });
 });

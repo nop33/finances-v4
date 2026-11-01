@@ -1,5 +1,5 @@
 import { ParsedTransaction } from '../types.js';
-import { normalizeAmount, parseDate } from './utils.js';
+import { normalizeAmount, parseDate, generateId } from './utils.js';
 
 interface ParseResult {
   orderNumber?: string;
@@ -84,15 +84,22 @@ export function parseSbb(content: string): ParsedTransaction[] {
     throw new Error('Missing travel date from receipt');
   }
 
-  // Build merchant name with order number for stable ID
+  // Build merchant name (stable across receipts with same item)
   let merchant = 'SBB EasyRide';
   if (result.firstItem) {
     merchant += ` - ${result.firstItem}`;
   }
-  // Include order number for stable ID generation
-  merchant += ` [${result.orderNumber}]`;
+
+  // Generate stable ID using order number for idempotent imports
+  const id = generateId(
+    'sbb',
+    result.travelDate,
+    result.orderNumber,
+    result.amount
+  );
 
   return [{
+    id,
     date: result.travelDate,
     merchant,
     description: result.paymentMethod,
