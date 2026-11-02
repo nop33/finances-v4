@@ -33,6 +33,8 @@ export interface MonthSummary {
   delta?: number;
 }
 
+const SPLITWISE_WINDOW_DAYS = 31;
+
 export function money(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -47,46 +49,119 @@ export function previousMonth(yearMonth: string): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+function addDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetween(a: string, b: string): number {
+  const start = Date.parse(`${a}T00:00:00Z`);
+  const end = Date.parse(`${b}T00:00:00Z`);
+  return Math.abs(end - start) / 86400000;
+}
+
+function monthBounds(yearMonth: string): { start: string; end: string } {
+  const start = `${yearMonth}-01`;
+  const [year, month] = yearMonth.split('-').map(Number);
+  const end = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  return { start, end };
+}
+
+export function roundToCentsSum(values: number[], target: number): number[] {
+  if (values.length === 0) return [];
+  const targetCents = Math.round(target * 100);
+  const items = values.map((value, index) => {
+    const exact = value * 100;
+    const base = Math.trunc(exact);
+    return { index, base, remainder: exact - base };
+  });
+  let leftover = targetCents - items.reduce((sum, item) => sum + item.base, 0);
+  const byRemainder = leftover >= 0
+    ? [...items].sort((a, b) => b.remainder - a.remainder || a.index - b.index)
+    : [...items].sort((a, b) => a.remainder - b.remainder || a.index - b.index);
+  const step = leftover > 0 ? 1 : -1;
+  let i = 0;
+  while (leftover !== 0 && byRemainder.length > 0) {
+    byRemainder[i % byRemainder.length].base += step;
+    leftover -= step;
+    i++;
+  }
+  const rounded = new Array<number>(values.length);
+  for (const item of items) {
+    rounded[item.index] = item.base / 100;
+  }
+  return rounded;
+}
+
 function countedTransactions(db: DB, yearMonth: string): Transaction[] {
   return db.getTransactionsByMonth(yearMonth)
     .filter(tx => !tx.excluded && !tx.coveredByFixedBill)
     .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
 }
 
-function merchantsMatch(a: string, b: string): boolean {
-  const left = a.toLowerCase().trim();
-  const right = b.toLowerCase().trim();
-  return left === right || left.includes(right) || right.includes(left);
+function foldDiacritics(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 }
 
-function splitwiseAdjustments(txs: Transaction[]): Map<string, number> {
-  const splitwise = txs.filter(tx => tx.source === 'splitwise');
-  const used = new Set<string>();
-  const links = new Map<string, number>();
+function merchantTokens(text: string): Set<string> {
+  return new Set(
+    foldDiacritics(text).split(/[^a-z0-9]+/).filter(token => token.length >= 2)
+  );
+}
 
-  for (const tx of txs) {
-    if (tx.source === 'splitwise') continue;
-    const candidates = splitwise.filter(sw =>
-      !used.has(sw.id) && sw.date === tx.date && merchantsMatch(tx.merchant, sw.merchant)
-    );
-    if (candidates.length === 0) continue;
-    candidates.sort((a, b) => {
-      const da = Math.abs(Math.abs(a.chfAmount) - Math.abs(tx.chfAmount));
-      const db = Math.abs(Math.abs(b.chfAmount) - Math.abs(tx.chfAmount));
-      if (da !== db) return da - db;
-      return a.id.localeCompare(b.id);
-    });
-    const pick = candidates[0];
-    used.add(pick.id);
-    links.set(tx.id, pick.chfAmount);
+export function merchantsMatch(a: string, b: string): boolean {
+  const left = merchantTokens(a);
+  const right = merchantTokens(b);
+  for (const token of left) {
+    if (right.has(token)) return true;
+  }
+  return false;
+}
+
+function splitwiseAdjustments(db: DB, yearMonth: string, txs: Transaction[]): Map<string, number> {
+  const { start, end } = monthBounds(yearMonth);
+  const nearby = db.getTransactionsByDateRange(
+    addDays(start, -SPLITWISE_WINDOW_DAYS),
+    addDays(end, SPLITWISE_WINDOW_DAYS)
+  );
+  const splitwise = nearby.filter(tx => tx.source === 'splitwise' && !tx.excluded);
+  const banks = txs.filter(tx => tx.source !== 'splitwise');
+
+  type Pair = { bank: Transaction; sw: Transaction; days: number };
+  const pairs: Pair[] = [];
+  for (const bank of banks) {
+    const charge = Math.abs(Math.round(bank.chfAmount * 100));
+    for (const sw of splitwise) {
+      const share = Math.abs(Math.round(sw.chfAmount * 100));
+      if (share > charge) continue;
+      if (daysBetween(bank.date, sw.date) > SPLITWISE_WINDOW_DAYS) continue;
+      if (!merchantsMatch(bank.merchant, sw.merchant)) continue;
+      pairs.push({ bank, sw, days: daysBetween(bank.date, sw.date) });
+    }
   }
 
+  pairs.sort((a, b) =>
+    a.days - b.days ||
+    a.bank.id.localeCompare(b.bank.id) ||
+    a.sw.id.localeCompare(b.sw.id)
+  );
+
+  const usedBank = new Set<string>();
+  const usedSw = new Set<string>();
+  const links = new Map<string, number>();
+  for (const pair of pairs) {
+    if (usedBank.has(pair.bank.id) || usedSw.has(pair.sw.id)) continue;
+    usedBank.add(pair.bank.id);
+    usedSw.add(pair.sw.id);
+    links.set(pair.bank.id, pair.sw.chfAmount);
+  }
   return links;
 }
 
 export function buildLedger(db: DB, yearMonth: string): LedgerRow[] {
   const txs = countedTransactions(db, yearMonth);
-  const adjustments = splitwiseAdjustments(txs);
+  const adjustments = splitwiseAdjustments(db, yearMonth, txs);
   const rows: LedgerRow[] = [];
 
   for (const tx of txs) {
@@ -118,6 +193,10 @@ export function buildLedger(db: DB, yearMonth: string): LedgerRow[] {
     }
   }
 
+  const rounded = roundToCentsSum(rows.map(row => row.amount), db.getMonthTotal(yearMonth));
+  rows.forEach((row, i) => {
+    row.amount = rounded[i];
+  });
   return rows;
 }
 
@@ -161,16 +240,25 @@ export function buildExpencesRow(db: DB, yearMonth: string, categories?: Categor
   for (const [category, amount] of Object.entries(totals)) {
     const cat = mapped.get(category);
     if (cat) {
-      cells[cat.column] = money((cells[cat.column] || 0) + amount);
-    } else if (money(amount) !== 0) {
-      unmapped.push({ category, amount: money(amount) });
+      cells[cat.column] = (cells[cat.column] || 0) + amount;
+    } else if (amount !== 0) {
+      unmapped.push({ category, amount });
     }
   }
   unmapped.sort((a, b) => a.category.localeCompare(b.category));
 
-  const cellsSum = money(Object.values(cells).reduce((sum, n) => sum + n, 0));
+  const cellKeys = Object.keys(cells);
+  const toRound = [...cellKeys.map(key => cells[key]), ...unmapped.map(row => row.amount)];
   const total = money(db.getMonthTotal(yearMonth));
+  const rounded = roundToCentsSum(toRound, total);
+  cellKeys.forEach((key, i) => {
+    cells[key] = rounded[i];
+  });
+  unmapped.forEach((row, i) => {
+    row.amount = rounded[cellKeys.length + i];
+  });
 
+  const cellsSum = money(Object.values(cells).reduce((sum, n) => sum + n, 0));
   return { month: yearMonth, cells, unmapped, total, cellsSum };
 }
 
