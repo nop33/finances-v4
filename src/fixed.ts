@@ -97,8 +97,8 @@ function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth
   if (patternMatches.length > 0) {
     return {
       flagUncovered: patternMatches,
-      missing: false,
-      changed: true
+      missing: isDue,
+      changed: false
     };
   }
 
