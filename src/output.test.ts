@@ -236,6 +236,7 @@ test('summary reports total, top categories, flagged count, and month-over-month
     assert.match(text, /fixedChanged: 1/);
     assert.match(text, /low confidence: 1/);
     assert.match(text, /vs 2024-09: -27\.00/);
+    assert.doesNotMatch(text, /previous month not loaded/);
   });
 });
 
@@ -310,9 +311,28 @@ test('summary flagged skips excluded and covered rows and does not treat missing
 test('summary omits month-over-month delta when the previous month is empty', () => {
   withMonth('./test-output-summary-nodelta.sqlite', db => {
     const summary = buildSummary(db, '2024-10');
-    assert.strictEqual(summary.previousMonth, undefined);
+    assert.strictEqual(summary.previousMonth, '2024-09');
     assert.strictEqual(summary.delta, undefined);
-    assert.doesNotMatch(formatSummary(summary), /vs /);
+    const text = formatSummary(summary);
+    assert.match(text, /previous month not loaded/);
+    assert.doesNotMatch(text, /vs 2024-09/);
+  });
+});
+
+test('summary treats a stray non-bank previous-month row as not loaded', () => {
+  withMonth('./test-output-summary-stray.sqlite', db => {
+    insertTx(db, {
+      id: 'sep-sw',
+      date: '2024-09-10',
+      source: 'splitwise',
+      merchant: 'Stray',
+      chfAmount: 5,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.delta, undefined);
+    assert.match(formatSummary(summary), /previous month not loaded/);
   });
 });
 
