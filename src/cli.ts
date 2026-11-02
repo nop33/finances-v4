@@ -7,6 +7,7 @@ import { categorizeMonth, correctTransaction } from './categorize.js';
 import { applyFixedBills } from './fixed.js';
 import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
 import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
+import { applyExcludeRules, setTransactionExcluded } from './exclude.js';
 import { startServer } from './web-server.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -25,6 +26,9 @@ function printUsage() {
   finances categorise --month YYYY-MM           Auto-categorise transactions for a month
   finances correct <txId> <category>            Correct a transaction's category
   finances split <txId> <category>=<chf> [...]  Split one charge across categories
+  finances exclude-apply --month YYYY-MM        Apply exclude-rules to a month
+  finances exclude <txId>                       Exclude a transaction from totals
+  finances include <txId>                       Include a transaction in totals
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
   finances total --month YYYY-MM                Show month total (excludes covered charges)
   finances serve [--port 4321] [--host 127.0.0.1]  Start web review server
@@ -136,7 +140,7 @@ try {
     console.log(`Categorising transactions for ${month}...`);
     categorizeMonth(db, month);
 
-    const transactions = db.getTransactionsByMonth(month);
+    const transactions = db.getTransactionsByMonth(month).filter(t => !t.excluded);
     const categorised = transactions.filter(t => t.category);
     console.log(`Categorised ${categorised.length} of ${transactions.length} transactions`);
   } else if (command === 'correct') {
@@ -171,6 +175,35 @@ try {
       for (const part of parts) {
         console.log(`  ${part.category}: CHF ${part.chfAmount.toFixed(2)}`);
       }
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  } else if (command === 'exclude-apply') {
+    const monthIndex = args.indexOf('--month');
+    if (monthIndex === -1 || !args[monthIndex + 1]) {
+      console.error('Error: --month YYYY-MM required');
+      process.exit(1);
+    }
+
+    const month = args[monthIndex + 1];
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      console.error('Error: Month must be in YYYY-MM format');
+      process.exit(1);
+    }
+
+    const applied = applyExcludeRules(db, month);
+    console.log(`Excluded ${applied} transaction(s) for ${month}`);
+  } else if (command === 'exclude' || command === 'include') {
+    const txId = args[1];
+    if (!txId) {
+      console.error(`Error: Usage: finances ${command} <txId>`);
+      process.exit(1);
+    }
+
+    try {
+      setTransactionExcluded(db, txId, command === 'exclude');
+      console.log(`${command === 'exclude' ? 'Excluded' : 'Included'} ${txId}`);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);

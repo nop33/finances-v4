@@ -442,6 +442,11 @@ export class DB {
     replace(splits);
   }
 
+  setExcluded(id: string, excluded: boolean): void {
+    const stmt = this.db.prepare('UPDATE transactions SET excluded = ? WHERE id = ?');
+    stmt.run(excluded ? 1 : 0, id);
+  }
+
   getSplits(transactionId: string): TransactionSplit[] {
     const stmt = this.db.prepare(`
       SELECT category, chf_amount as chfAmount

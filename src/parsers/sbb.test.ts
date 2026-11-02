@@ -50,6 +50,7 @@ CHF 7.40`;
     assert.strictEqual(transactions[0].originalAmount, 7.40);
     assert.strictEqual(transactions[0].originalCurrency, 'CHF');
     assert.strictEqual(transactions[0].source, 'sbb');
+    assert.strictEqual(transactions[0].kind, 'expense');
     assert.ok(transactions[0].id, 'Should have an ID');
   });
 
