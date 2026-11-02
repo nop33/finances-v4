@@ -94,6 +94,74 @@ test('applyFixedBills preserves reviewed flag on re-run', () => {
   }
 });
 
+test('applyFixedBills does not cover a pattern match whose amount is far from the bill', () => {
+  const dbPath = './test-fixed-amount-mismatch.sqlite';
+  const db = new DB(dbPath);
+
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  process.env.FIXED_BILLS_CONFIG = './dist/test-fixtures/test-fixed-bills.json';
+
+  try {
+    const bankTx: Transaction = {
+      id: 'bank1',
+      date: '2024-10-05',
+      source: 'neon',
+      merchant: 'Landlord Inc',
+      originalAmount: 26.95,
+      originalCurrency: 'CHF',
+      chfAmount: 26.95,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(bankTx);
+    applyFixedBills(db, '2024-10');
+
+    const leftover = db.getTransaction('bank1');
+    assert.ok(leftover);
+    assert.strictEqual(leftover.coveredByFixedBill, null, 'Off-amount charge must stay a normal expense');
+
+    const allFixed = db.getTransactionsByMonth('2024-10').filter(t => t.source === 'fixed');
+    const totalFixed = allFixed.reduce((sum, t) => sum + t.chfAmount, 0);
+    assert.strictEqual(db.getMonthTotal('2024-10'), totalFixed + 26.95);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('applyFixedBills covers a pattern match within 10% of the bill amount', () => {
+  const dbPath = './test-fixed-amount-match.sqlite';
+  const db = new DB(dbPath);
+
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  process.env.FIXED_BILLS_CONFIG = './dist/test-fixtures/test-fixed-bills.json';
+
+  try {
+    const bankTx: Transaction = {
+      id: 'bank1',
+      date: '2024-10-05',
+      source: 'neon',
+      merchant: 'Landlord Inc',
+      originalAmount: 1090,
+      originalCurrency: 'CHF',
+      chfAmount: 1090,
+      fileRowIndex: 1,
+      importedAt: new Date().toISOString()
+    };
+
+    db.insertTransaction(bankTx);
+    applyFixedBills(db, '2024-10');
+
+    const covered = db.getTransaction('bank1');
+    assert.ok(covered);
+    assert.strictEqual(covered.coveredByFixedBill, 'Test monthly rent');
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
 test('applyFixedBills marks matching bank transactions as covered', () => {
   const dbPath = './test-fixed-covered.sqlite';
   const db = new DB(dbPath);

@@ -109,6 +109,14 @@ export function getExpectedChargeAmount(bill: FixedBill): number {
   return bill.monthlyAmount;
 }
 
+// A bank charge is covered by a bill only when |amount - expected| / expected <= 10%.
+export function amountsMatchBill(chfAmount: number, expectedAmount: number): boolean {
+  if (expectedAmount === 0) return chfAmount === 0;
+  const diffCents = Math.abs(Math.round(chfAmount * 100) - Math.round(expectedAmount * 100));
+  const limitCents = Math.round(Math.abs(expectedAmount) * 10); // 10%
+  return diffCents <= limitCents;
+}
+
 export function matchesBillPattern(merchant: string, bill: FixedBill): boolean {
   if (!bill.merchantPatterns || bill.merchantPatterns.length === 0) {
     return false;
