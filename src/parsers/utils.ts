@@ -6,6 +6,16 @@ export function generateId(prefix: string, ...parts: (string | number)[]): strin
   return `${prefix}-${hash}`;
 }
 
+export function importTransactionId(
+  source: string,
+  date: string,
+  amount: number,
+  merchant: string,
+  occurrence: number
+): string {
+  return generateId(source.substring(0, 3), date, amount, merchant, occurrence);
+}
+
 export function parseDate(dateStr: string, format: 'DD-MM-YYYY' | 'DD.MM.YYYY' | 'YYYY-MM-DD'): string {
   if (format === 'YYYY-MM-DD') {
     return dateStr;

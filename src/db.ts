@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { Transaction, FxRate, TransactionSplit } from './types.js';
+import { importTransactionId, repairMojibake } from './parsers/utils.js';
 
 export class DB {
   private db: Database.Database;
@@ -83,6 +84,7 @@ export class DB {
       CREATE INDEX IF NOT EXISTS idx_splits_transaction ON transaction_splits(transaction_id);
     `);
     this.ensureColumn('transactions', 'exclude_override', 'TEXT');
+    this.migrateImportIds();
   }
 
   private ensureColumn(table: string, column: string, type: string): void {
@@ -90,6 +92,119 @@ export class DB {
     if (!cols.some(c => c.name === column)) {
       this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }
+  }
+
+  private migrateImportIds(): void {
+    type Row = {
+      id: string;
+      date: string;
+      source: string;
+      merchant: string;
+      description: string | null;
+      originalAmount: number;
+      fileRowIndex: number;
+      importedAt: string;
+      reviewed: number;
+      category: string | null;
+    };
+
+    const rows = this.db.prepare(`
+      SELECT
+        id, date, source, merchant, description,
+        original_amount as originalAmount,
+        file_row_index as fileRowIndex,
+        imported_at as importedAt,
+        reviewed, category
+      FROM transactions
+      WHERE source NOT IN ('fixed', 'splitwise', 'sbb', 'twint')
+        AND id NOT LIKE 'fixed:%'
+        AND id NOT LIKE 'sw-%'
+        AND id NOT LIKE 'twi-%'
+    `).all() as Row[];
+
+    if (rows.length === 0) return;
+
+    const repairMerchant = this.db.prepare('UPDATE transactions SET merchant = ? WHERE id = ?');
+    for (const row of rows) {
+      const repaired = repairMojibake(row.merchant);
+      if (repaired !== row.merchant) {
+        repairMerchant.run(repaired, row.id);
+        row.merchant = repaired;
+      }
+    }
+
+    const deleteTx = this.db.prepare('DELETE FROM transactions WHERE id = ?');
+    const deleteSplits = this.db.prepare('DELETE FROM transaction_splits WHERE transaction_id = ?');
+    const moveSplits = this.db.prepare(
+      'UPDATE transaction_splits SET transaction_id = ? WHERE transaction_id = ?'
+    );
+    const rename = this.db.prepare('UPDATE transactions SET id = ? WHERE id = ?');
+
+    const score = (row: Row) => (row.reviewed ? 100 : 0) + (row.category ? 10 : 0);
+
+    const collapseInto = (survivor: Row, extra: Row) => {
+      const survivorHasSplits = this.db.prepare(
+        'SELECT 1 FROM transaction_splits WHERE transaction_id = ?'
+      ).get(survivor.id);
+      if (!survivorHasSplits) {
+        moveSplits.run(survivor.id, extra.id);
+      } else {
+        deleteSplits.run(extra.id);
+      }
+      deleteTx.run(extra.id);
+    };
+
+    const apply = this.db.transaction(() => {
+      const byRow = new Map<string, Row[]>();
+      for (const row of rows) {
+        const key = `${row.source}|${row.date}|${row.originalAmount}|${row.merchant}|${row.fileRowIndex}`;
+        const group = byRow.get(key) || [];
+        group.push(row);
+        byRow.set(key, group);
+      }
+
+      const surviving: Row[] = [];
+      for (const group of byRow.values()) {
+        group.sort((a, b) => {
+          const byScore = score(b) - score(a);
+          if (byScore !== 0) return byScore;
+          return a.importedAt < b.importedAt ? 1 : a.importedAt > b.importedAt ? -1 : a.id.localeCompare(b.id);
+        });
+        const survivor = group[0];
+        for (const extra of group.slice(1)) {
+          collapseInto(survivor, extra);
+        }
+        surviving.push(survivor);
+      }
+
+      surviving.sort((a, b) => {
+        if (a.source !== b.source) return a.source.localeCompare(b.source);
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        if (a.originalAmount !== b.originalAmount) return a.originalAmount - b.originalAmount;
+        if (a.merchant !== b.merchant) return a.merchant.localeCompare(b.merchant);
+        if (a.fileRowIndex !== b.fileRowIndex) return a.fileRowIndex - b.fileRowIndex;
+        return a.id.localeCompare(b.id);
+      });
+
+      const occurrence = new Map<string, number>();
+      for (const row of surviving) {
+        const tuple = `${row.source}|${row.date}|${row.originalAmount}|${row.merchant}`;
+        const n = (occurrence.get(tuple) || 0) + 1;
+        occurrence.set(tuple, n);
+        const newId = importTransactionId(row.source, row.date, row.originalAmount, row.merchant, n);
+        if (newId === row.id) continue;
+
+        const taken = this.db.prepare('SELECT id FROM transactions WHERE id = ?').get(newId) as { id: string } | undefined;
+        if (taken) {
+          collapseInto({ ...row, id: taken.id }, row);
+        } else {
+          moveSplits.run(newId, row.id);
+          rename.run(newId, row.id);
+          row.id = newId;
+        }
+      }
+    });
+    apply();
   }
 
   insertTransaction(tx: Transaction): void {

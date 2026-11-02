@@ -1,10 +1,19 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, test } from 'node:test';
 import assert from 'node:assert';
 import { DB } from './db.js';
 import { importTransactions } from './import.js';
-import { ParsedTransaction } from './types.js';
+import { ParsedTransaction, Transaction } from './types.js';
 import { parseRevolutCsv } from './parsers/revolut.js';
 import { unlinkSync } from 'fs';
+
+function parsed(partial: Partial<ParsedTransaction> & { date: string; merchant: string; originalAmount: number }): ParsedTransaction {
+  return {
+    originalCurrency: 'CHF',
+    source: 'neon',
+    fileRowIndex: 0,
+    ...partial
+  };
+}
 
 describe('Import module', () => {
   const testDbPath = './test-import.sqlite';
@@ -177,4 +186,104 @@ Exchange,Current,2024-11-05 09:00:00,2024-11-05 09:00:15,Exchanged to EUR,-20.00
     assert.strictEqual(transfer?.excluded, true);
     assert.strictEqual(exchange?.excluded, true);
   });
+});
+
+test('overlapping exports of the same source do not duplicate rows when earlier rows are prepended', async () => {
+  const dbPath = './test-import-overlap.sqlite';
+  const db = new DB(dbPath);
+  try {
+    const oneMonth: ParsedTransaction[] = [
+      parsed({ date: '2024-12-10', merchant: 'COOP', originalAmount: 12, fileRowIndex: 0 }),
+      parsed({ date: '2024-12-15', merchant: 'MIGROS', originalAmount: 40, fileRowIndex: 1 }),
+    ];
+    const twoMonth: ParsedTransaction[] = [
+      parsed({ date: '2024-11-02', merchant: 'SBB', originalAmount: 5, fileRowIndex: 0 }),
+      parsed({ date: '2024-11-20', merchant: 'Pending extra', originalAmount: 3, fileRowIndex: 1 }),
+      parsed({ date: '2024-12-10', merchant: 'COOP', originalAmount: 12, fileRowIndex: 2 }),
+      parsed({ date: '2024-12-15', merchant: 'MIGROS', originalAmount: 40, fileRowIndex: 3 }),
+    ];
+
+    await importTransactions(db, oneMonth);
+    await importTransactions(db, twoMonth);
+
+    const nov = db.getTransactionsByMonth('2024-11');
+    const dec = db.getTransactionsByMonth('2024-12');
+    assert.strictEqual(nov.length, 2);
+    assert.strictEqual(dec.filter(t => t.merchant === 'COOP').length, 1);
+    assert.strictEqual(dec.filter(t => t.merchant === 'MIGROS').length, 1);
+    assert.strictEqual(dec.length, 2);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('two same-day identical purchases stay two rows across re-import', async () => {
+  const dbPath = './test-import-identical-pair.sqlite';
+  const db = new DB(dbPath);
+  try {
+    const file: ParsedTransaction[] = [
+      parsed({ date: '2024-12-20', merchant: 'MIGROS', originalAmount: 45.5, fileRowIndex: 0 }),
+      parsed({ date: '2024-12-20', merchant: 'MIGROS', originalAmount: 45.5, fileRowIndex: 1 }),
+    ];
+
+    await importTransactions(db, file);
+    assert.strictEqual(db.getTransactionsByMonth('2024-12').length, 2);
+
+    await importTransactions(db, file);
+    assert.strictEqual(db.getTransactionsByMonth('2024-12').length, 2);
+
+    const shifted: ParsedTransaction[] = [
+      parsed({ date: '2024-12-01', merchant: 'Earlier', originalAmount: 1, fileRowIndex: 0 }),
+      parsed({ date: '2024-12-20', merchant: 'MIGROS', originalAmount: 45.5, fileRowIndex: 4 }),
+      parsed({ date: '2024-12-20', merchant: 'MIGROS', originalAmount: 45.5, fileRowIndex: 5 }),
+    ];
+    await importTransactions(db, shifted);
+    const migros = db.getTransactionsByMonth('2024-12').filter(t => t.merchant === 'MIGROS');
+    assert.strictEqual(migros.length, 2);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('re-import after mojibake repair does not duplicate a pre-fix row', async () => {
+  const dbPath = './test-import-mojibake-migrate.sqlite';
+  const garbled = Buffer.from('Ταβέρνα', 'utf8').toString('latin1');
+  const db = new DB(dbPath);
+  try {
+    db.insertTransaction({
+      id: 'old-garbled-id',
+      date: '2024-12-08',
+      source: 'swisscard',
+      merchant: garbled,
+      originalAmount: 18.5,
+      originalCurrency: 'CHF',
+      chfAmount: 18.5,
+      fileRowIndex: 7,
+      importedAt: '2024-12-08T10:00:00.000Z',
+    } as Transaction);
+  } finally {
+    db.close();
+  }
+
+  const migrated = new DB(dbPath);
+  try {
+    await importTransactions(migrated, [
+      parsed({
+        date: '2024-12-08',
+        merchant: 'Ταβέρνα',
+        originalAmount: 18.5,
+        source: 'swisscard',
+        fileRowIndex: 0,
+      }),
+    ]);
+    const txs = migrated.getTransactionsByMonth('2024-12').filter(t => t.originalAmount === 18.5);
+    assert.strictEqual(txs.length, 1);
+    assert.strictEqual(txs[0].merchant, 'Ταβέρνα');
+    assert.notStrictEqual(txs[0].id, 'old-garbled-id');
+  } finally {
+    migrated.close();
+    unlinkSync(dbPath);
+  }
 });
