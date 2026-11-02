@@ -325,10 +325,8 @@ export function buildSummary(db: DB, yearMonth: string): MonthSummary {
   return summary;
 }
 
-const BANK_SOURCES = new Set(['cembra', 'swisscard', 'neon', 'revolut']);
-
 export function previousMonthLoaded(db: DB, yearMonth: string): boolean {
-  return db.getTransactionsByMonth(yearMonth).some(tx => BANK_SOURCES.has(tx.source));
+  return db.monthCoveredByImport(yearMonth);
 }
 
 export function formatSummary(summary: MonthSummary): string {

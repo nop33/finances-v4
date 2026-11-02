@@ -18,7 +18,9 @@ const command = args[0];
 
 function printUsage() {
   console.log(`Usage:
-  finances import <file1> [file2 ...]           Import transaction files
+  finances import [--month YYYY-MM] <file1> [file2 ...]
+                                                Import transaction files
+                                                Optional --month records the statement month
   finances sbb import <file1.txt> [file2.txt ...]  Import SBB EasyRide receipt files
   finances splitwise import --month YYYY-MM     Import Splitwise expenses for a month
   finances splitwise import-csv --month YYYY-MM --me "Name" <file1> [file2 ...]
@@ -51,6 +53,25 @@ function requireMonth(argv: string[]): string {
   return month;
 }
 
+function takeOptionalMonth(argv: string[]): { month?: string; rest: string[] } {
+  const rest: string[] = [];
+  let month: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--month') {
+      const value = argv[i + 1];
+      if (!value || !/^\d{4}-\d{2}$/.test(value)) {
+        console.error('Error: --month YYYY-MM required');
+        process.exit(1);
+      }
+      month = value;
+      i++;
+      continue;
+    }
+    rest.push(argv[i]);
+  }
+  return { month, rest };
+}
+
 function requireOut(argv: string[]): string {
   const outIndex = argv.indexOf('--out');
   const outPath = outIndex !== -1 ? argv[outIndex + 1] : undefined;
@@ -74,7 +95,7 @@ const db = new DB(dbPath);
 
 try {
   if (command === 'import') {
-    const files = args.slice(1);
+    const { month: statementMonth, rest: files } = takeOptionalMonth(args.slice(1));
     if (files.length === 0) {
       console.error('Error: No files specified');
       process.exit(1);
@@ -84,7 +105,7 @@ try {
       console.log(`Importing ${file}...`);
       const parsed = parseFile(file);
       console.log(`  Parsed ${parsed.length} transactions`);
-      const stats = await importTransactions(db, parsed);
+      const stats = await importTransactions(db, parsed, { file, statementMonth });
       console.log(`  ${formatImportStats(stats)}`);
     }
   } else if (command === 'sbb' && args[1] === 'import') {

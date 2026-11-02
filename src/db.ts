@@ -2,6 +2,17 @@ import Database from 'better-sqlite3';
 import { Transaction, FxRate, TransactionSplit } from './types.js';
 import { importTransactionId, repairMojibake, swisscardSignedAmount } from './parsers/utils.js';
 
+export const BANK_SOURCES = new Set(['cembra', 'swisscard', 'neon', 'revolut']);
+export const MONTH_COVER_MIN_DISTINCT_DATES = 5;
+
+export interface FileImportRecord {
+  file: string;
+  source?: string;
+  statementMonth?: string;
+  dates: string[];
+  importedAt?: string;
+}
+
 export class DB {
   private db: Database.Database;
 
@@ -88,6 +99,23 @@ export class DB {
       );
 
       CREATE INDEX IF NOT EXISTS idx_splits_transaction ON transaction_splits(transaction_id);
+
+      CREATE TABLE IF NOT EXISTS imports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file TEXT NOT NULL,
+        source TEXT,
+        min_date TEXT,
+        max_date TEXT,
+        statement_month TEXT,
+        imported_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS import_dates (
+        import_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        PRIMARY KEY (import_id, date),
+        FOREIGN KEY (import_id) REFERENCES imports(id)
+      );
     `);
     this.ensureColumn('transactions', 'exclude_override', 'TEXT');
     this.migrateImportIds();
@@ -680,6 +708,49 @@ export class DB {
       const splits = byId.get(tx.id);
       return splits && splits.length > 0 ? { ...tx, splits } : tx;
     });
+  }
+
+  recordFileImport(record: FileImportRecord): number {
+    const dates = [...new Set(record.dates.filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)))].sort();
+    const minDate = dates[0] || null;
+    const maxDate = dates[dates.length - 1] || null;
+    const importedAt = record.importedAt || new Date().toISOString();
+    const insert = this.db.prepare(`
+      INSERT INTO imports (file, source, min_date, max_date, statement_month, imported_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const insertDate = this.db.prepare('INSERT OR IGNORE INTO import_dates (import_id, date) VALUES (?, ?)');
+    return this.db.transaction(() => {
+      const result = insert.run(
+        record.file,
+        record.source || null,
+        minDate,
+        maxDate,
+        record.statementMonth || null,
+        importedAt
+      );
+      const importId = Number(result.lastInsertRowid);
+      for (const date of dates) {
+        insertDate.run(importId, date);
+      }
+      return importId;
+    })();
+  }
+
+  monthCoveredByImport(yearMonth: string): boolean {
+    const explicit = this.db.prepare(
+      'SELECT 1 FROM imports WHERE statement_month = ? LIMIT 1'
+    ).get(yearMonth);
+    if (explicit) return true;
+
+    const covered = this.db.prepare(`
+      SELECT import_id FROM import_dates
+      WHERE date LIKE ? || '%'
+      GROUP BY import_id
+      HAVING COUNT(*) >= ?
+      LIMIT 1
+    `).get(yearMonth, MONTH_COVER_MIN_DISTINCT_DATES);
+    return !!covered;
   }
 
   close(): void {

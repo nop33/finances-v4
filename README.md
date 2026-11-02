@@ -12,6 +12,7 @@ This is the v4 feature set with auto-categorisation. It parses bank exports, con
 - **FX conversion**: Fetches historical rates from frankfurter.app for the transaction date, caches them in SQLite
 - **Stable IDs**: Includes file row index and occurrence count to keep same-day duplicate purchases distinct
 - **Idempotent imports**: Re-importing the same file updates existing records by ID
+- **Import coverage**: Each bank import records the file, date range, and distinct row dates so a statement spill-over does not count as the previous month
 - **Category map**: Loads expense categories from your local config with group, leaf name, column letter, and tier
 - **Auto-categorisation**: Assigns categories using merchant memory (learned from corrections) and user-defined rules
 - **Anomaly detection**: Flags new merchants, unusual amounts, possible duplicates, and unconverted FX
@@ -100,13 +101,13 @@ node dist/cli.js summary --month 2024-10
 
 ### Commands
 
-- **import**: Import one or more transaction files
+- **import** `[--month YYYY-MM]`: Import one or more transaction files. Each import records the file, min/max row date, and distinct bank-row dates. Optional `--month` stores the statement month those files belong to.
 - **categorise --month YYYY-MM**: Auto-categorise all unreviewed transactions for the specified month
 - **list --month YYYY-MM**: List all transactions for the specified month
 - **correct <txId> <category>**: Manually correct a transaction's category, teaching merchant memory for future similar transactions
 - **ledger --month YYYY-MM --out file.csv**: Counted (non-excluded, not covered-by-bill) transactions as CSV. Splits become one row per part. Columns: date, source, merchant, amount, category, splitwise_adjustment, reviewed. Sorted by date then id. A bank charge whose merchant tokens overlap a Splitwise row within ±31 days, with `|share| <= charge`, gets that share in `splitwise_adjustment` (each Splitwise row links at most once). Linking is display-only and does not change totals. Displayed amounts use largest-remainder rounding so they sum to the month total.
 - **expences-row --month YYYY-MM --out file.json**: One monthly Expences row from `CATEGORY_CONFIG` leaf columns (letters C–CL). JSON `{month, cells, unmapped, total, cellsSum}`. Every mapped column is present (0 if no spend). Categories with spend but no column are listed in `unmapped`. Cell and unmapped amounts use largest-remainder rounding so they sum to the month total. Formula columns are not written.
-- **summary --month YYYY-MM**: Total, top 5 categories, flagged row count (`fixedChanged`, `fixedMissing`, confidence below 0.7, new merchant) with a per-flag breakdown. Excluded rows and covered bank charges are skipped; missing confidence is not treated as low. Reviewed or corrected rows are never flagged for new merchant or low confidence. `fixedChanged` / `fixedMissing` count until the row is reviewed. Month-over-month delta when the previous month has at least one imported bank-source row (cembra, swisscard, neon, revolut). Otherwise prints `previous month not loaded`.
+- **summary --month YYYY-MM**: Total, top 5 categories, flagged row count (`fixedChanged`, `fixedMissing`, confidence below 0.7, new merchant) with a per-flag breakdown. Excluded rows and covered bank charges are skipped; missing confidence is not treated as low. Reviewed or corrected rows are never flagged for new merchant or low confidence. `fixedChanged` / `fixedMissing` count until the row is reviewed. Month-over-month delta when some bank import covers most of the previous month: that import was passed `--month` for it, or it has bank rows on at least 5 distinct dates in it. A few statement spill-over dates (e.g. 09-30 rows inside an October file) do not count. Otherwise prints `previous month not loaded`.
 
 ## Schema
 
@@ -133,6 +134,19 @@ node dist/cli.js summary --month 2024-10
 - `unusual_amount`: 1 if amount is >2σ from this merchant's history
 - `possible_duplicate`: 1 if same merchant+amount within 7 days (excluding same-day)
 - `unconverted_fx`: 1 if foreign currency without FX rate
+
+### imports
+
+- `id`: auto-increment primary key
+- `file`: path of the imported file
+- `source`: bank source of the file
+- `min_date`, `max_date`: first and last row dates in the file
+- `statement_month`: YYYY-MM when `import --month` was passed
+- `imported_at`: timestamp of the import
+
+### import_dates
+
+- `import_id`, `date`: distinct calendar dates of bank-source rows in that import
 
 ### fx_rates
 
