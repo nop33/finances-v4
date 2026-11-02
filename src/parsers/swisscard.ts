@@ -1,6 +1,6 @@
 import Papa from 'papaparse';
 import { ParsedTransaction } from '../types.js';
-import { parseDate, normalizeAmount } from './utils.js';
+import { parseDate, normalizeAmount, repairMojibake } from './utils.js';
 
 export function parseSwisscard(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, { header: true, skipEmptyLines: true });
@@ -8,8 +8,8 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
 
   result.data.forEach((row: any, index: number) => {
     const transactionDate = row['Transaction date'];
-    const merchant = row['Merchant'] || row['Description'] || '';
-    const description = row['Description'] || '';
+    const merchant = repairMojibake(row['Merchant'] || row['Description'] || '');
+    const description = repairMojibake(row['Description'] || '');
     const cardNumber = row['Card number'] || '';
     const currency = row['Currency'] || 'CHF';
     const amount = parseFloat(row['Amount']) || 0;

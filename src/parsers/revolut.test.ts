@@ -56,4 +56,17 @@ EXCHANGE,Current,2024-10-16 09:00:00,2024-10-16 09:00:15,EUR Exchange,-100.00,-2
     assert.strictEqual(transactions[0].originalAmount, 44.00, 'Amount should include fee (42.50 + 1.50)');
     assert.strictEqual(transactions[1].originalAmount, 102.00, 'Exchange amount should include fee (100.00 + 2.00)');
   });
+
+  it('should repair double-encoded UTF-8 (mojibake)', () => {
+    // Simulate double-encoded UTF-8: 'ü' becomes 'Ã¼', 'ä' becomes 'Ã¤'
+    // Create mojibaked strings by encoding the correct UTF-8 bytes as Latin-1
+    const bakerei = Buffer.from('Bäckerei Zürich', 'utf8').toString('latin1');
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+CARD_PAYMENT,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,${bakerei},-25.00,0,CHF,COMPLETED,1000.00`;
+
+    const transactions = parseRevolutCsv(csv);
+
+    assert.strictEqual(transactions.length, 1);
+    assert.strictEqual(transactions[0].merchant, 'Bäckerei Zürich', 'German umlauts should be repaired');
+  });
 });

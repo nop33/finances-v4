@@ -47,4 +47,15 @@ describe('Swisscard parser', () => {
     assert.strictEqual(transactions[0].merchant, 'MIGROS');
     assert.strictEqual(transactions[1].merchant, 'TIBITS');
   });
+
+  it('should repair double-encoded UTF-8 (mojibake)', () => {
+    // Simulate double-encoded UTF-8: 'ü' becomes 'Ã¼'
+    const csv = `Transaction date,Description,Merchant,Card number,Currency,Amount,Debit/Credit,Status,Merchant Category,Registered Category
+01.10.2024,Groceries,BÃ¤ckerei ZÃ¼rich,5555,CHF,42.30,Debit,Posted,Food,`;
+
+    const transactions = parseSwisscard(csv);
+
+    assert.strictEqual(transactions.length, 1);
+    assert.strictEqual(transactions[0].merchant, 'Bäckerei Zürich', 'German umlauts should be repaired');
+  });
 });

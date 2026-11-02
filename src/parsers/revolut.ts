@@ -1,7 +1,7 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { ParsedTransaction } from '../types.js';
-import { normalizeAmount } from './utils.js';
+import { normalizeAmount, repairMojibake } from './utils.js';
 
 export function parseRevolutCsv(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, { header: true, skipEmptyLines: true });
@@ -24,7 +24,7 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     if (state !== 'COMPLETED') return;
 
     const startedDate = row['Started Date'];
-    const merchant = row['Description'] || '';
+    const merchant = repairMojibake(row['Description'] || '');
     const type = row['Type'] || '';
     const description = type;
     const amount = parseFloat(row['Amount']) || 0;
