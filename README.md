@@ -180,6 +180,32 @@ Set environment variables to override defaults:
 
 - `DB_PATH`: Database location (default: `./data/finances.sqlite`)
 - `CATEGORY_CONFIG`: Category configuration file (default: `./data/expences-columns.json`)
+- `FIXED_BILLS_CONFIG`: Fixed bills JSON (default: `./data/fixed-bills.json`)
+
+## Fixed bills
+
+`finances fixed apply --month YYYY-MM` inserts one synthetic row per bill (the listed `monthlyAmount`) and may mark a bank charge as covered so it does not also count.
+
+Coverage needs a merchant pattern match **and** an amount within 10% of the expected charge (`monthlyAmount`, or `monthlyAmount * 12` in `renewalMonth`). Among several in-band matches, the closest amount wins. Other pattern matches stay as normal expenses.
+
+A match outside that 10% band is treated as a possible extra purchase from the same merchant. It still counts, the synthetic bill still counts, and both rows are flagged `fixedChanged` for review. Nothing is dropped or double-counted by covering the extra.
+
+Set `"coverAnyAmount": true` on a bill when a charge of any amount should cover it, for example rent paid in full and later partly repaid. That flag applies to one match or many. With several off-band matches it covers the closest.
+
+```json
+{
+  "bills": [
+    {
+      "id": "rent",
+      "label": "Rent",
+      "category": "Living/Rent",
+      "monthlyAmount": 1000,
+      "merchantPatterns": ["landlord"],
+      "coverAnyAmount": true
+    }
+  ]
+}
+```
 
 ## Repository rules
 

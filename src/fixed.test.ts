@@ -130,13 +130,39 @@ test('applyFixedBills preserves reviewed flag on re-run', () => {
   }
 });
 
-test('applyFixedBills covers a single off-amount pattern match so rent is not double counted', () => {
-  withBills('./test-fixed-off-amount-rent.sqlite', [{
+test('applyFixedBills does not cover a single off-band same-merchant purchase', () => {
+  withBills('./test-fixed-off-band-tool.sqlite', [{
+    id: 'tools',
+    label: 'Yearly tools',
+    category: 'Tech/Phone',
+    monthlyAmount: 10,
+    renewalMonth: 10,
+    merchantPatterns: ['^tool']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Tool 50', 50));
+    applyFixedBills(db, '2024-10');
+
+    const bank = db.getTransaction('bank1');
+    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:tools:2024-10');
+    assert.ok(bank);
+    assert.ok(bill);
+    assert.strictEqual(bank.coveredByFixedBill, null);
+    assert.strictEqual(bank.fixedChanged, true);
+    assert.strictEqual(bill.fixedChanged, true);
+    assert.strictEqual(bill.fixedMissing, false);
+    assert.strictEqual(bill.excluded, false);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 60);
+  });
+});
+
+test('coverAnyAmount covers a single off-band charge such as rent paid in full', () => {
+  withBills('./test-fixed-cover-any-single.sqlite', [{
     id: 'rent',
     label: 'Rent',
     category: 'Living/Rent',
     monthlyAmount: 1000,
-    merchantPatterns: ['landlord']
+    merchantPatterns: ['landlord'],
+    coverAnyAmount: true
   }], db => {
     db.insertTransaction(charge('bank1', 'Landlord 3000', 3000));
     applyFixedBills(db, '2024-10');
@@ -148,49 +174,7 @@ test('applyFixedBills covers a single off-amount pattern match so rent is not do
     assert.strictEqual(bank.coveredByFixedBill, 'Rent');
     assert.strictEqual(bank.fixedChanged, true);
     assert.strictEqual(bill.fixedChanged, true);
-    assert.strictEqual(bill.fixedMissing, false);
     assert.strictEqual(db.getMonthTotal('2024-10'), 1000);
-  });
-});
-
-test('applyFixedBills covers a yearly bill whose charge rose past 10%', () => {
-  withBills('./test-fixed-off-amount-yearly.sqlite', [{
-    id: 'insure',
-    label: 'Yearly insurance',
-    category: 'Health/Insurance',
-    monthlyAmount: 165,
-    merchantPatterns: ['insurer']
-  }], db => {
-    db.insertTransaction(charge('bank1', 'Insurer AG', 190));
-    applyFixedBills(db, '2024-10');
-
-    const bank = db.getTransaction('bank1');
-    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:insure:2024-10');
-    assert.ok(bank);
-    assert.ok(bill);
-    assert.strictEqual(bank.coveredByFixedBill, 'Yearly insurance');
-    assert.strictEqual(bank.fixedChanged, true);
-    assert.strictEqual(bill.fixedChanged, true);
-    assert.strictEqual(db.getMonthTotal('2024-10'), 165);
-  });
-});
-
-test('applyFixedBills covers a family-plan charge far above the listed share', () => {
-  withBills('./test-fixed-off-amount-family.sqlite', [{
-    id: 'phone',
-    label: 'Phone share',
-    category: 'Tech/Phone',
-    monthlyAmount: 4,
-    merchantPatterns: ['carrier']
-  }], db => {
-    db.insertTransaction(charge('bank1', 'Carrier Family', 27));
-    applyFixedBills(db, '2024-10');
-
-    const bank = db.getTransaction('bank1');
-    assert.ok(bank);
-    assert.strictEqual(bank.coveredByFixedBill, 'Phone share');
-    assert.strictEqual(bank.fixedChanged, true);
-    assert.strictEqual(db.getMonthTotal('2024-10'), 4);
   });
 });
 
@@ -241,7 +225,8 @@ test('applyFixedBills does not guess which off-amount charge is the bill', () =>
     assert.strictEqual(b.fixedChanged, true);
     assert.strictEqual(bill.fixedChanged, true);
     assert.strictEqual(bill.fixedMissing, false);
-    assert.strictEqual(db.getMonthTotal('2024-10'), 5000);
+    assert.strictEqual(bill.excluded, false);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 6000);
   });
 });
 
