@@ -15,6 +15,7 @@ import {
   merchantsMatch,
 } from './output.js';
 import { splitTransaction } from './split.js';
+import { categorizeMonth, correctTransaction } from './categorize.js';
 
 const categoryConfig = './dist/test-fixtures/test-output-categories.json';
 
@@ -302,6 +303,97 @@ test('summary flagged skips excluded and covered rows and does not treat missing
     assert.match(text, /fixedMissing: 1/);
     assert.match(text, /new merchant: 1/);
     assert.match(text, /low confidence: 0/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('summary does not flag a reviewed new merchant after correct', () => {
+  const dbPath = './test-output-flagged-reviewed.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'shop-1',
+      date: '2024-10-10',
+      merchant: 'Shop',
+      chfAmount: 20,
+    });
+    categorizeMonth(db, '2024-10');
+    const before = db.getTransaction('shop-1');
+    assert.strictEqual(before?.newMerchant, true);
+    assert.strictEqual(before?.reviewed, false);
+    const flagged = buildSummary(db, '2024-10');
+    assert.strictEqual(flagged.flagged, 1);
+    assert.strictEqual(flagged.flaggedBreakdown.newMerchant, 1);
+    assert.match(formatSummary(flagged), /new merchant: 1/);
+
+    correctTransaction(db, 'shop-1', 'Meals/Snacks');
+    const after = db.getTransaction('shop-1');
+    assert.strictEqual(after?.reviewed, true);
+    assert.strictEqual(after?.newMerchant, true);
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.flagged, 0);
+    assert.strictEqual(summary.flaggedBreakdown.newMerchant, 0);
+    assert.strictEqual(summary.flaggedBreakdown.lowConfidence, 0);
+    assert.match(formatSummary(summary), /new merchant: 0/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('summary skips reviewed rows for confidence flags and for fixed flags once reviewed', () => {
+  const dbPath = './test-output-flagged-reviewed-bits.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'reviewed-low',
+      date: '2024-10-06',
+      merchant: 'Cafe',
+      chfAmount: 8,
+      confidence: 0.2,
+      reviewed: true,
+    });
+    insertTx(db, {
+      id: 'reviewed-changed',
+      date: '2024-10-07',
+      merchant: 'Gym',
+      chfAmount: 40,
+      source: 'fixed',
+      fixedChanged: true,
+      reviewed: true,
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'open-changed',
+      date: '2024-10-08',
+      merchant: 'Internet',
+      chfAmount: 60,
+      source: 'fixed',
+      fixedChanged: true,
+      reviewed: false,
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'open-missing',
+      date: '2024-10-09',
+      merchant: 'Insurance',
+      chfAmount: 20,
+      source: 'fixed',
+      fixedMissing: true,
+      reviewed: false,
+      confidence: 1,
+    });
+
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.flagged, 2);
+    assert.deepStrictEqual(summary.flaggedBreakdown, {
+      fixedChanged: 1,
+      fixedMissing: 1,
+      lowConfidence: 0,
+      newMerchant: 0,
+    });
   } finally {
     db.close();
     unlinkSync(dbPath);

@@ -280,12 +280,16 @@ function isReviewable(tx: Transaction): boolean {
   return !tx.excluded && !tx.coveredByFixedBill;
 }
 
+function isPendingReview(tx: Transaction): boolean {
+  return isReviewable(tx) && !tx.reviewed;
+}
+
 function isLowConfidence(tx: Transaction): boolean {
   return tx.confidence != null && tx.confidence < 0.7;
 }
 
 function isFlagged(tx: Transaction): boolean {
-  if (!isReviewable(tx)) return false;
+  if (!isPendingReview(tx)) return false;
   return !!tx.fixedChanged || !!tx.fixedMissing || isLowConfidence(tx) || !!tx.newMerchant;
 }
 
@@ -296,13 +300,13 @@ export function buildSummary(db: DB, yearMonth: string): MonthSummary {
     .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category))
     .slice(0, 5);
 
-  const reviewable = db.getTransactionsByMonth(yearMonth).filter(isReviewable);
-  const flaggedRows = reviewable.filter(isFlagged);
+  const pending = db.getTransactionsByMonth(yearMonth).filter(isPendingReview);
+  const flaggedRows = pending.filter(isFlagged);
   const flaggedBreakdown: FlaggedBreakdown = {
-    fixedChanged: reviewable.filter(tx => !!tx.fixedChanged).length,
-    fixedMissing: reviewable.filter(tx => !!tx.fixedMissing).length,
-    lowConfidence: reviewable.filter(isLowConfidence).length,
-    newMerchant: reviewable.filter(tx => !!tx.newMerchant).length,
+    fixedChanged: pending.filter(tx => !!tx.fixedChanged).length,
+    fixedMissing: pending.filter(tx => !!tx.fixedMissing).length,
+    lowConfidence: pending.filter(isLowConfidence).length,
+    newMerchant: pending.filter(tx => !!tx.newMerchant).length,
   };
   const summary: MonthSummary = {
     month: yearMonth,
