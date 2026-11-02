@@ -17,10 +17,20 @@ export function parseCembra(content: string): ParsedTransaction[] {
     if (!bookingDate) return;
 
     const date = parseDate(bookingDate, 'DD-MM-YYYY');
-    const isDebit = type === 'Debit';
+    const isCredit = type === 'Credit';
     const isCashback = description.toLowerCase().includes('cashback');
+    const descLower = description.toLowerCase();
+    const merchantLower = merchant.toLowerCase();
 
-    const originalAmount = normalizeAmount(amount);
+    // Spending is positive, credits/cashback are negative
+    const originalAmount = (isCredit || isCashback) ? -normalizeAmount(amount) : normalizeAmount(amount);
+
+    // Detect transaction kind
+    let kind: ParsedTransaction['kind'] = 'expense';
+    if (isCredit && (descLower.includes('payment') || merchantLower.includes('cembra') || 
+        descLower.includes('card payment') || descLower.includes('bill payment'))) {
+      kind = 'card-payment';
+    }
 
     transactions.push({
       date,
@@ -31,6 +41,7 @@ export function parseCembra(content: string): ParsedTransaction[] {
       source: 'cembra',
       sourceCard: creditCard,
       fileRowIndex: index,
+      kind,
     });
   });
 

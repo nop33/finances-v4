@@ -28,4 +28,16 @@ describe('Neon parser', () => {
     assert.strictEqual(transactions[0].originalCurrency, 'CHF');
     assert.strictEqual(transactions[0].originalAmount, 32.10);
   });
+
+  it('should handle income with negative amounts', () => {
+    const csv = `"Date";"Amount";"Original amount";"Original currency";"Exchange rate";"Description";"Subject";"Category"
+2024-10-15;-45.50;-45.50;CHF;1.00;MIGROS;Groceries;Food
+2024-10-16;500.00;500.00;CHF;1.00;Salary;Monthly salary;Income`;
+
+    const transactions = parseNeon(csv);
+
+    assert.strictEqual(transactions.length, 2);
+    assert.strictEqual(transactions[0].originalAmount, 45.50, 'Spending should be positive');
+    assert.strictEqual(transactions[1].originalAmount, -500.00, 'Income should be negative');
+  });
 });

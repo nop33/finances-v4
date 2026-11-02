@@ -56,6 +56,8 @@ test('applyFixedBills is idempotent', () => {
     for (let i = 0; i < firstRun.length; i++) {
       assert.strictEqual(firstRun[i].id, secondRun[i].id);
       assert.strictEqual(firstRun[i].chfAmount, secondRun[i].chfAmount);
+      assert.strictEqual(firstRun[i].category, secondRun[i].category, 'Category should be preserved');
+      assert.strictEqual(firstRun[i].confidence, secondRun[i].confidence, 'Confidence should be preserved');
     }
   } finally {
     db.close();

@@ -11,6 +11,9 @@ expences-columns.json
 fixed-bills.json
 **/fixed-bills.json
 
+# Exclude rules (contains personal patterns)
+.exclude-rules.json
+
 # Databases
 *.sqlite
 *.sqlite3

@@ -1,7 +1,7 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { ParsedTransaction } from '../types.js';
-import { normalizeAmount } from './utils.js';
+import { normalizeAmount, repairMojibake } from './utils.js';
 
 export function parseRevolutCsv(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, { header: true, skipEmptyLines: true });
@@ -16,6 +16,10 @@ export function parseRevolutXlsx(buffer: Buffer): ParsedTransaction[] {
   return processRevolutRows(data);
 }
 
+function normalizeRevolutType(type: string): string {
+  return type.toLowerCase().replace(/[\s_-]+/g, '');
+}
+
 function processRevolutRows(rows: any[]): ParsedTransaction[] {
   const transactions: ParsedTransaction[] = [];
 
@@ -24,15 +28,31 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     if (state !== 'COMPLETED') return;
 
     const startedDate = row['Started Date'];
-    const merchant = row['Description'] || '';
-    const description = row['Type'] || '';
+    const merchant = repairMojibake(row['Description'] || '');
+    const type = row['Type'] || '';
+    const description = type;
     const amount = parseFloat(row['Amount']) || 0;
+    const fee = parseFloat(row['Fee']) || 0;
     const currency = row['Currency'] || 'CHF';
 
     if (!startedDate) return;
 
     const date = startedDate.split(' ')[0];
-    const originalAmount = normalizeAmount(amount);
+    // Revolut CSV: spending Amount is negative, Fee is positive.
+    // Spend (our convention: spending positive) is -(amount - fee).
+    // Example: Amount -24.85, Fee 0.25 → 25.10 paid.
+    const originalAmount = -normalizeAmount(amount - fee);
+
+    const typeKey = normalizeRevolutType(type);
+    let kind: ParsedTransaction['kind'] = 'expense';
+    if (typeKey === 'topup') {
+      kind = 'top-up';
+    } else if (typeKey === 'transfer') {
+      kind = 'transfer';
+    } else if (typeKey === 'exchange') {
+      kind = 'exchange';
+    }
+    // Card Refund stays an expense (negative spend). Do not treat positive Amount as income.
 
     transactions.push({
       date,
@@ -42,6 +62,7 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
       originalCurrency: currency,
       source: 'revolut',
       fileRowIndex: index,
+      kind,
     });
   });
 

@@ -1,0 +1,18 @@
+[
+  {
+    "pattern": "interactive brokers",
+    "description": "Broker transfers"
+  },
+  {
+    "pattern": "coinbase",
+    "description": "Crypto exchange"
+  },
+  {
+    "pattern": "savings space",
+    "description": "Internal savings transfers"
+  },
+  {
+    "pattern": "salary",
+    "description": "Income"
+  }
+]

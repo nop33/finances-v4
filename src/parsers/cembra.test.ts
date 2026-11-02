@@ -32,4 +32,18 @@ describe('Cembra parser', () => {
     assert.strictEqual(transactions.length, 2);
     assert.notStrictEqual(transactions[0], transactions[1]);
   });
+
+  it('should handle credit transactions with negative amounts', () => {
+    const csv = `Account number,Credit Card,Booking date,Merchant,Description,Type,Amount (CHF)
+1234567890,1111,15-10-2024,MIGROS,Purchase,Debit,45.50
+1234567890,1111,16-10-2024,MIGROS,Refund,Credit,20.00
+1234567890,2222,17-10-2024,CEMBRA,Cashback reward,Debit,5.00`;
+
+    const transactions = parseCembra(csv);
+
+    assert.strictEqual(transactions.length, 3);
+    assert.strictEqual(transactions[0].originalAmount, 45.50, 'Debit should be positive');
+    assert.strictEqual(transactions[1].originalAmount, -20.00, 'Credit should be negative');
+    assert.strictEqual(transactions[2].originalAmount, -5.00, 'Cashback should be negative');
+  });
 });

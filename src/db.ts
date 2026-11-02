@@ -38,7 +38,9 @@ export class DB {
         unconverted_fx INTEGER DEFAULT 0,
         fixed_missing INTEGER DEFAULT 0,
         fixed_changed INTEGER DEFAULT 0,
-        covered_by_fixed_bill TEXT
+        covered_by_fixed_bill TEXT,
+        kind TEXT,
+        excluded INTEGER DEFAULT 0
       );
 
       CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
@@ -80,7 +82,7 @@ export class DB {
         SET date = ?, source = ?, source_card = ?, merchant = ?, description = ?,
             original_amount = ?, original_currency = ?, chf_amount = ?,
             fx_rate = ?, fx_rate_date = ?, fx_conversion_failed = ?,
-            file_row_index = ?, imported_at = ?
+            file_row_index = ?, imported_at = ?, kind = ?
         WHERE id = ?
       `);
       
@@ -98,6 +100,7 @@ export class DB {
         tx.fxConversionFailed ? 1 : 0,
         tx.fileRowIndex,
         tx.importedAt,
+        tx.kind || null,
         tx.id
       );
     } else {
@@ -109,8 +112,8 @@ export class DB {
           file_row_index, imported_at,
           category, confidence, explanation, categorization_source, reviewed,
           new_merchant, unusual_amount, possible_duplicate, unconverted_fx,
-          fixed_missing, fixed_changed, covered_by_fixed_bill
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          fixed_missing, fixed_changed, covered_by_fixed_bill, kind, excluded
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insertStmt.run(
@@ -139,7 +142,9 @@ export class DB {
         tx.unconvertedFx ? 1 : 0,
         tx.fixedMissing ? 1 : 0,
         tx.fixedChanged ? 1 : 0,
-        tx.coveredByFixedBill || null
+        tx.coveredByFixedBill || null,
+        tx.kind || null,
+        tx.excluded ? 1 : 0
       );
     }
   }
@@ -166,7 +171,7 @@ export class DB {
         new_merchant as newMerchant, unusual_amount as unusualAmount,
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
-        covered_by_fixed_bill as coveredByFixedBill
+        covered_by_fixed_bill as coveredByFixedBill, kind, excluded
       FROM transactions
       WHERE date LIKE ? || '%'
       ORDER BY date, file_row_index
@@ -181,7 +186,8 @@ export class DB {
       possibleDuplicate: !!row.possibleDuplicate,
       unconvertedFx: !!row.unconvertedFx,
       fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged
+      fixedChanged: !!row.fixedChanged,
+      excluded: !!row.excluded
     }));
   }
 
@@ -215,7 +221,7 @@ export class DB {
         new_merchant as newMerchant, unusual_amount as unusualAmount,
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
-        covered_by_fixed_bill as coveredByFixedBill
+        covered_by_fixed_bill as coveredByFixedBill, kind, excluded
       FROM transactions
       WHERE id = ?
     `);
@@ -230,7 +236,8 @@ export class DB {
       possibleDuplicate: !!row.possibleDuplicate,
       unconvertedFx: !!row.unconvertedFx,
       fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged
+      fixedChanged: !!row.fixedChanged,
+      excluded: !!row.excluded
     };
   }
 
@@ -325,7 +332,7 @@ export class DB {
         new_merchant as newMerchant, unusual_amount as unusualAmount,
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
-        covered_by_fixed_bill as coveredByFixedBill
+        covered_by_fixed_bill as coveredByFixedBill, kind, excluded
       FROM transactions
       WHERE merchant = ?
       ORDER BY date DESC
@@ -340,7 +347,8 @@ export class DB {
       possibleDuplicate: !!row.possibleDuplicate,
       unconvertedFx: !!row.unconvertedFx,
       fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged
+      fixedChanged: !!row.fixedChanged,
+      excluded: !!row.excluded
     }));
   }
 
@@ -357,7 +365,7 @@ export class DB {
         new_merchant as newMerchant, unusual_amount as unusualAmount,
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
-        covered_by_fixed_bill as coveredByFixedBill
+        covered_by_fixed_bill as coveredByFixedBill, kind, excluded
       FROM transactions
       WHERE date >= ? AND date <= ?
       ORDER BY date, file_row_index
@@ -372,7 +380,8 @@ export class DB {
       possibleDuplicate: !!row.possibleDuplicate,
       unconvertedFx: !!row.unconvertedFx,
       fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged
+      fixedChanged: !!row.fixedChanged,
+      excluded: !!row.excluded
     }));
   }
 
@@ -424,6 +433,7 @@ export class DB {
       FROM transactions
       WHERE date LIKE ? || '%'
         AND covered_by_fixed_bill IS NULL
+        AND (excluded IS NULL OR excluded = 0)
     `);
     const result = stmt.get(yearMonth) as { total: number | null };
     return result.total || 0;
