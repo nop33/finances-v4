@@ -1,7 +1,7 @@
 import { DB } from './db.js';
 import { FxConverter } from './fx.js';
 import { Transaction, ParsedTransaction } from './types.js';
-import { generateId } from './parsers/utils.js';
+import { importTransactionId, repairMojibake } from './parsers/utils.js';
 import { loadExcludeRules, shouldExclude } from './exclude.js';
 
 export async function importTransactions(
@@ -16,16 +16,16 @@ export async function importTransactions(
   const sourceOccurrences = new Map<string, number>();
 
   for (const parsed of parsedTransactions) {
-    const naturalKey = `${parsed.date}-${parsed.source}-${parsed.merchant}-${parsed.originalAmount}`;
+    const merchant = repairMojibake(parsed.merchant);
+    const naturalKey = `${parsed.date}-${parsed.source}-${merchant}-${parsed.originalAmount}`;
     const occurrence = (sourceOccurrences.get(naturalKey) || 0) + 1;
     sourceOccurrences.set(naturalKey, occurrence);
 
-    const id = parsed.id || generateId(
-      parsed.source.substring(0, 3),
+    const id = parsed.id || importTransactionId(
+      parsed.source,
       parsed.date,
-      parsed.merchant,
       parsed.originalAmount,
-      parsed.fileRowIndex,
+      merchant,
       occurrence
     );
 
