@@ -16,6 +16,10 @@ export function parseRevolutXlsx(buffer: Buffer): ParsedTransaction[] {
   return processRevolutRows(data);
 }
 
+function normalizeRevolutType(type: string): string {
+  return type.toLowerCase().replace(/[\s_-]+/g, '');
+}
+
 function processRevolutRows(rows: any[]): ParsedTransaction[] {
   const transactions: ParsedTransaction[] = [];
 
@@ -34,24 +38,21 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     if (!startedDate) return;
 
     const date = startedDate.split(' ')[0];
-    // Revolut CSV has spending as negative, income as positive
-    // We use convention: spending positive, credits/income negative
-    // Add fee to amount (fee is already in the correct sign)
-    const originalAmount = -normalizeAmount(amount + fee);
+    // Revolut CSV: spending Amount is negative, Fee is positive.
+    // Spend (our convention: spending positive) is -(amount - fee).
+    // Example: Amount -24.85, Fee 0.25 → 25.10 paid.
+    const originalAmount = -normalizeAmount(amount - fee);
 
-    // Map Revolut Type to transaction kind
+    const typeKey = normalizeRevolutType(type);
     let kind: ParsedTransaction['kind'] = 'expense';
-    const typeLower = type.toLowerCase();
-    if (typeLower === 'topup' || typeLower === 'top-up') {
+    if (typeKey === 'topup') {
       kind = 'top-up';
-    } else if (typeLower === 'transfer') {
+    } else if (typeKey === 'transfer') {
       kind = 'transfer';
-    } else if (typeLower === 'exchange') {
+    } else if (typeKey === 'exchange') {
       kind = 'exchange';
-    } else if (amount > 0) {
-      // Positive amount in CSV means income
-      kind = 'income';
     }
+    // Card Refund stays an expense (negative spend). Do not treat positive Amount as income.
 
     transactions.push({
       date,
