@@ -313,12 +313,18 @@ export function buildSummary(db: DB, yearMonth: string): MonthSummary {
   };
 
   const prev = previousMonth(yearMonth);
-  if (db.getTransactionsByMonth(prev).length > 0) {
-    summary.previousMonth = prev;
+  summary.previousMonth = prev;
+  if (previousMonthLoaded(db, prev)) {
     summary.delta = money(summary.total - db.getMonthTotal(prev));
   }
 
   return summary;
+}
+
+const BANK_SOURCES = new Set(['cembra', 'swisscard', 'neon', 'revolut']);
+
+export function previousMonthLoaded(db: DB, yearMonth: string): boolean {
+  return db.getTransactionsByMonth(yearMonth).some(tx => BANK_SOURCES.has(tx.source));
 }
 
 export function formatSummary(summary: MonthSummary): string {
@@ -339,9 +345,11 @@ export function formatSummary(summary: MonthSummary): string {
   lines.push(`  fixedMissing: ${summary.flaggedBreakdown.fixedMissing}`);
   lines.push(`  low confidence: ${summary.flaggedBreakdown.lowConfidence}`);
   lines.push(`  new merchant: ${summary.flaggedBreakdown.newMerchant}`);
-  if (summary.previousMonth !== undefined && summary.delta !== undefined) {
+  if (summary.delta !== undefined && summary.previousMonth) {
     const signed = summary.delta > 0 ? `+${formatDecimal(summary.delta)}` : formatDecimal(summary.delta);
     lines.push(`vs ${summary.previousMonth}: ${signed}`);
+  } else {
+    lines.push('previous month not loaded');
   }
   return lines.join('\n') + '\n';
 }
