@@ -78,12 +78,18 @@ Card Payment,Current,2024-10-18 10:30:00,2024-10-18 10:30:05,MIGROS,-10.00,0,CHF
 
   it('should repair double-encoded UTF-8 (mojibake)', () => {
     const bakerei = Buffer.from('Bäckerei Zürich', 'utf8').toString('latin1');
+    const greek = Buffer.from('Ταβέρνα', 'utf8').toString('latin1');
+    const dashed = Buffer.from('Shop – Zurich', 'utf8').toString('latin1');
     const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
-Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,${bakerei},-25.00,0,CHF,COMPLETED,1000.00`;
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,${bakerei},-25.00,0,CHF,COMPLETED,1000.00
+Card Payment,Current,2024-10-16 10:30:00,2024-10-16 10:30:05,${greek},-18.00,0,CHF,COMPLETED,982.00
+Card Payment,Current,2024-10-17 10:30:00,2024-10-17 10:30:05,${dashed},-12.00,0,CHF,COMPLETED,970.00`;
 
     const transactions = parseRevolutCsv(csv);
 
-    assert.strictEqual(transactions.length, 1);
-    assert.strictEqual(transactions[0].merchant, 'Bäckerei Zürich', 'German umlauts should be repaired');
+    assert.strictEqual(transactions.length, 3);
+    assert.strictEqual(transactions[0].merchant, 'Bäckerei Zürich');
+    assert.strictEqual(transactions[1].merchant, 'Ταβέρνα');
+    assert.strictEqual(transactions[2].merchant, 'Shop – Zurich');
   });
 });
