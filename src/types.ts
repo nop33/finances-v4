@@ -79,6 +79,7 @@ export interface CategorizationRule {
 export interface ExcludeRule {
   pattern: string;
   description?: string;
+  kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
 }
 
 export interface TransactionSplit {
