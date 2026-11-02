@@ -114,7 +114,7 @@ export function getExpectedChargeAmount(bill: FixedBill): number {
   return bill.monthlyAmount;
 }
 
-// True when |amount - expected| / expected <= 10%. Used to pick among several pattern matches.
+// True when |amount - expected| / expected <= 10%. Off-band matches cover only if coverAnyAmount is set.
 export function amountsMatchBill(chfAmount: number, expectedAmount: number): boolean {
   if (expectedAmount === 0) return chfAmount === 0;
   const diffCents = Math.abs(Math.round(chfAmount * 100) - Math.round(expectedAmount * 100));

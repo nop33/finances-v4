@@ -43,14 +43,10 @@ export function applyFixedBills(db: DB, yearMonth: string): void {
       reviewed: existingTx?.reviewed || false
     };
 
-    let excludeSynthetic = false;
-
     if (bill.merchantPatterns && bill.merchantPatterns.length > 0) {
       const coverage = pickCoverage(bill, allTransactions, yearMonth);
       syntheticTx.fixedMissing = coverage.missing;
       syntheticTx.fixedChanged = coverage.changed;
-      excludeSynthetic = coverage.excludeSynthetic;
-      syntheticTx.excluded = coverage.excludeSynthetic;
 
       if (coverage.cover) {
         db.markAsCoveredByFixedBill(coverage.cover.id, bill.label, coverage.changed);
@@ -62,7 +58,6 @@ export function applyFixedBills(db: DB, yearMonth: string): void {
 
     db.insertTransaction(syntheticTx);
     db.setFixedReviewFlags(syntheticTx.id, !!syntheticTx.fixedMissing, !!syntheticTx.fixedChanged);
-    db.setExcluded(syntheticTx.id, excludeSynthetic);
   }
 }
 
@@ -71,7 +66,6 @@ function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth
   flagUncovered: Transaction[];
   missing: boolean;
   changed: boolean;
-  excludeSynthetic: boolean;
 } {
   const isDue = isBillDue(bill, yearMonth);
   const expectedAmount = getExpectedChargeAmount(bill);
@@ -86,45 +80,31 @@ function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth
       cover,
       flagUncovered: [],
       missing: false,
-      changed: percentOff(cover.chfAmount, expectedAmount) > 2,
-      excludeSynthetic: false
+      changed: percentOff(cover.chfAmount, expectedAmount) > 2
     };
   }
 
-  if (patternMatches.length === 1) {
-    return {
-      cover: patternMatches[0],
-      flagUncovered: [],
-      missing: false,
-      changed: true,
-      excludeSynthetic: false
-    };
-  }
-
-  if (patternMatches.length > 1 && bill.coverAnyAmount) {
+  if (patternMatches.length > 0 && bill.coverAnyAmount) {
     const cover = closestCharge(patternMatches, expectedAmount);
     return {
       cover,
       flagUncovered: [],
       missing: false,
-      changed: true,
-      excludeSynthetic: false
+      changed: true
     };
   }
 
-  if (patternMatches.length > 1) {
+  if (patternMatches.length > 0) {
     return {
       flagUncovered: patternMatches,
       missing: false,
-      changed: true,
-      excludeSynthetic: true
+      changed: true
     };
   }
 
   return {
     flagUncovered: [],
     missing: isDue,
-    changed: false,
-    excludeSynthetic: false
+    changed: false
   };
 }
