@@ -22,4 +22,16 @@ describe('Swisscard parser', () => {
     assert.strictEqual(transactions[2].originalCurrency, 'EUR');
     assert.strictEqual(transactions[2].originalAmount, 150.00);
   });
+
+  it('should handle credit transactions with negative amounts', () => {
+    const csv = `Transaction date,Description,Merchant,Card number,Currency,Amount,Debit/Credit,Status,Merchant Category,Registered Category
+01.10.2024,Purchase,MIGROS,5555,CHF,42.30,Debit,Posted,Groceries,
+02.10.2024,Refund,MIGROS,5555,CHF,15.00,Credit,Posted,Groceries,`;
+
+    const transactions = parseSwisscard(csv);
+
+    assert.strictEqual(transactions.length, 2);
+    assert.strictEqual(transactions[0].originalAmount, 42.30, 'Debit should be positive');
+    assert.strictEqual(transactions[1].originalAmount, -15.00, 'Credit should be negative');
+  });
 });

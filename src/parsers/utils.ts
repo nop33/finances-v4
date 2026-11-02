@@ -20,6 +20,7 @@ export function parseDate(dateStr: string, format: 'DD-MM-YYYY' | 'DD.MM.YYYY' |
   throw new Error(`Unsupported date format: ${format}`);
 }
 
+// Sign convention: spending is positive, credits/refunds/cashback are negative
 export function normalizeAmount(amount: number): number {
-  return Math.abs(amount);
+  return amount;
 }

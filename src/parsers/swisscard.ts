@@ -18,7 +18,10 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
     if (!transactionDate) return;
 
     const date = parseDate(transactionDate, 'DD.MM.YYYY');
-    const originalAmount = normalizeAmount(amount);
+    
+    // Spending is positive, credits are negative
+    const isCredit = debitCredit === 'Credit';
+    const originalAmount = isCredit ? -normalizeAmount(amount) : normalizeAmount(amount);
 
     transactions.push({
       date,

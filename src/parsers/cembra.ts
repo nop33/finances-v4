@@ -17,10 +17,11 @@ export function parseCembra(content: string): ParsedTransaction[] {
     if (!bookingDate) return;
 
     const date = parseDate(bookingDate, 'DD-MM-YYYY');
-    const isDebit = type === 'Debit';
+    const isCredit = type === 'Credit';
     const isCashback = description.toLowerCase().includes('cashback');
 
-    const originalAmount = normalizeAmount(amount);
+    // Spending is positive, credits/cashback are negative
+    const originalAmount = (isCredit || isCashback) ? -normalizeAmount(amount) : normalizeAmount(amount);
 
     transactions.push({
       date,

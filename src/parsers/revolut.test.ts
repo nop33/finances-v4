@@ -30,4 +30,18 @@ CARD_PAYMENT,Current,2024-10-16 14:20:00,,PENDING SHOP,-35.00,0,EUR,PENDING,950.
 
     assert.strictEqual(transactions.length, 1);
   });
+
+  it('should handle income and refunds with negative amounts', () => {
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+CARD_PAYMENT,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-42.50,0,CHF,COMPLETED,1000.00
+TRANSFER,Current,2024-10-16 09:00:00,2024-10-16 09:00:15,Salary,5000.00,0,CHF,COMPLETED,5950.00
+CARD_REFUND,Current,2024-10-17 11:00:00,2024-10-17 11:00:05,MIGROS Refund,20.00,0,CHF,COMPLETED,5970.00`;
+
+    const transactions = parseRevolutCsv(csv);
+
+    assert.strictEqual(transactions.length, 3);
+    assert.strictEqual(transactions[0].originalAmount, 42.50, 'Spending should be positive');
+    assert.strictEqual(transactions[1].originalAmount, -5000.00, 'Income should be negative');
+    assert.strictEqual(transactions[2].originalAmount, -20.00, 'Refund should be negative');
+  });
 });

@@ -19,7 +19,9 @@ export function parseNeon(content: string): ParsedTransaction[] {
 
     if (!date) return;
 
-    const originalAmount = normalizeAmount(amount);
+    // Neon CSV has spending as negative, income as positive
+    // We use convention: spending positive, credits/income negative
+    const originalAmount = -normalizeAmount(amount);
 
     transactions.push({
       date,

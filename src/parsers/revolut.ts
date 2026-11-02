@@ -32,7 +32,9 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     if (!startedDate) return;
 
     const date = startedDate.split(' ')[0];
-    const originalAmount = normalizeAmount(amount);
+    // Revolut CSV has spending as negative, income as positive
+    // We use convention: spending positive, credits/income negative
+    const originalAmount = -normalizeAmount(amount);
 
     transactions.push({
       date,
