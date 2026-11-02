@@ -44,4 +44,16 @@ CARD_REFUND,Current,2024-10-17 11:00:00,2024-10-17 11:00:05,MIGROS Refund,20.00,
     assert.strictEqual(transactions[1].originalAmount, -5000.00, 'Income should be negative');
     assert.strictEqual(transactions[2].originalAmount, -20.00, 'Refund should be negative');
   });
+
+  it('should add fee to transaction amount', () => {
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+CARD_PAYMENT,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-42.50,-1.50,CHF,COMPLETED,1000.00
+EXCHANGE,Current,2024-10-16 09:00:00,2024-10-16 09:00:15,EUR Exchange,-100.00,-2.00,EUR,COMPLETED,950.00`;
+
+    const transactions = parseRevolutCsv(csv);
+
+    assert.strictEqual(transactions.length, 2);
+    assert.strictEqual(transactions[0].originalAmount, 44.00, 'Amount should include fee (42.50 + 1.50)');
+    assert.strictEqual(transactions[1].originalAmount, 102.00, 'Exchange amount should include fee (100.00 + 2.00)');
+  });
 });
