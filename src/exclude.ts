@@ -41,6 +41,7 @@ export function applyExcludeRules(db: DB, yearMonth: string): number {
   const transactions = db.getTransactionsByMonth(yearMonth);
   let applied = 0;
   for (const tx of transactions) {
+    if (tx.excludeOverride) continue;
     if (shouldExclude(tx, rules) && !tx.excluded) {
       db.setExcluded(tx.id, true);
       applied++;
@@ -54,5 +55,5 @@ export function setTransactionExcluded(db: DB, txId: string, excluded: boolean):
   if (!tx) {
     throw new Error(`Transaction ${txId} not found`);
   }
-  db.setExcluded(txId, excluded);
+  db.setExcluded(txId, excluded, true);
 }

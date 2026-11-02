@@ -27,6 +27,7 @@ export interface Transaction {
   coveredByFixedBill?: string;
   kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
   excluded?: boolean;
+  excludeOverride?: 'include' | 'exclude';
   splits?: TransactionSplit[];
 }
 
