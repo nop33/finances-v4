@@ -1,9 +1,45 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { writeFileSync, unlinkSync } from 'fs';
 import { applyFixedBills } from './fixed.js';
 import { DB } from './db.js';
 import { Transaction } from './types.js';
-import { unlinkSync } from 'fs';
+import { FixedBill } from './fixed-bills.js';
+
+function withBills(dbPath: string, bills: FixedBill[], run: (db: DB) => void): void {
+  const configPath = dbPath.replace('.sqlite', '-bills.json');
+  writeFileSync(configPath, JSON.stringify({ bills }));
+  const prevCat = process.env.CATEGORY_CONFIG;
+  const prevBills = process.env.FIXED_BILLS_CONFIG;
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  process.env.FIXED_BILLS_CONFIG = configPath;
+  const db = new DB(dbPath);
+  try {
+    run(db);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+    unlinkSync(configPath);
+    if (prevCat === undefined) delete process.env.CATEGORY_CONFIG;
+    else process.env.CATEGORY_CONFIG = prevCat;
+    if (prevBills === undefined) delete process.env.FIXED_BILLS_CONFIG;
+    else process.env.FIXED_BILLS_CONFIG = prevBills;
+  }
+}
+
+function charge(id: string, merchant: string, chfAmount: number, fileRowIndex = 1): Transaction {
+  return {
+    id,
+    date: '2024-10-05',
+    source: 'neon',
+    merchant,
+    originalAmount: chfAmount,
+    originalCurrency: 'CHF',
+    chfAmount,
+    fileRowIndex,
+    importedAt: new Date().toISOString()
+  };
+}
 
 test('applyFixedBills creates synthetic transactions for active bills', () => {
   const dbPath = './test-fixed-apply-basic.sqlite';
@@ -94,40 +130,145 @@ test('applyFixedBills preserves reviewed flag on re-run', () => {
   }
 });
 
-test('applyFixedBills does not cover a pattern match whose amount is far from the bill', () => {
-  const dbPath = './test-fixed-amount-mismatch.sqlite';
-  const db = new DB(dbPath);
-
-  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
-  process.env.FIXED_BILLS_CONFIG = './dist/test-fixtures/test-fixed-bills.json';
-
-  try {
-    const bankTx: Transaction = {
-      id: 'bank1',
-      date: '2024-10-05',
-      source: 'neon',
-      merchant: 'Landlord Inc',
-      originalAmount: 26.95,
-      originalCurrency: 'CHF',
-      chfAmount: 26.95,
-      fileRowIndex: 1,
-      importedAt: new Date().toISOString()
-    };
-
-    db.insertTransaction(bankTx);
+test('applyFixedBills covers a single off-amount pattern match so rent is not double counted', () => {
+  withBills('./test-fixed-off-amount-rent.sqlite', [{
+    id: 'rent',
+    label: 'Rent',
+    category: 'Living/Rent',
+    monthlyAmount: 1000,
+    merchantPatterns: ['landlord']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Landlord 3000', 3000));
     applyFixedBills(db, '2024-10');
 
-    const leftover = db.getTransaction('bank1');
-    assert.ok(leftover);
-    assert.strictEqual(leftover.coveredByFixedBill, null, 'Off-amount charge must stay a normal expense');
+    const bank = db.getTransaction('bank1');
+    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:rent:2024-10');
+    assert.ok(bank);
+    assert.ok(bill);
+    assert.strictEqual(bank.coveredByFixedBill, 'Rent');
+    assert.strictEqual(bank.fixedChanged, true);
+    assert.strictEqual(bill.fixedChanged, true);
+    assert.strictEqual(bill.fixedMissing, false);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 1000);
+  });
+});
 
-    const allFixed = db.getTransactionsByMonth('2024-10').filter(t => t.source === 'fixed');
-    const totalFixed = allFixed.reduce((sum, t) => sum + t.chfAmount, 0);
-    assert.strictEqual(db.getMonthTotal('2024-10'), totalFixed + 26.95);
-  } finally {
-    db.close();
-    unlinkSync(dbPath);
-  }
+test('applyFixedBills covers a yearly bill whose charge rose past 10%', () => {
+  withBills('./test-fixed-off-amount-yearly.sqlite', [{
+    id: 'insure',
+    label: 'Yearly insurance',
+    category: 'Health/Insurance',
+    monthlyAmount: 165,
+    merchantPatterns: ['insurer']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Insurer AG', 190));
+    applyFixedBills(db, '2024-10');
+
+    const bank = db.getTransaction('bank1');
+    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:insure:2024-10');
+    assert.ok(bank);
+    assert.ok(bill);
+    assert.strictEqual(bank.coveredByFixedBill, 'Yearly insurance');
+    assert.strictEqual(bank.fixedChanged, true);
+    assert.strictEqual(bill.fixedChanged, true);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 165);
+  });
+});
+
+test('applyFixedBills covers a family-plan charge far above the listed share', () => {
+  withBills('./test-fixed-off-amount-family.sqlite', [{
+    id: 'phone',
+    label: 'Phone share',
+    category: 'Tech/Phone',
+    monthlyAmount: 4,
+    merchantPatterns: ['carrier']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Carrier Family', 27));
+    applyFixedBills(db, '2024-10');
+
+    const bank = db.getTransaction('bank1');
+    assert.ok(bank);
+    assert.strictEqual(bank.coveredByFixedBill, 'Phone share');
+    assert.strictEqual(bank.fixedChanged, true);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 4);
+  });
+});
+
+test('applyFixedBills keeps an extra same-merchant purchase when another charge is within 10%', () => {
+  withBills('./test-fixed-extra-purchase.sqlite', [{
+    id: 'phone',
+    label: 'Phone share',
+    category: 'Tech/Phone',
+    monthlyAmount: 4,
+    merchantPatterns: ['carrier']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Carrier Family', 4, 1));
+    db.insertTransaction(charge('bank2', 'Carrier Family', 27, 2));
+    applyFixedBills(db, '2024-10');
+
+    const billCharge = db.getTransaction('bank1');
+    const extra = db.getTransaction('bank2');
+    assert.ok(billCharge);
+    assert.ok(extra);
+    assert.strictEqual(billCharge.coveredByFixedBill, 'Phone share');
+    assert.strictEqual(extra.coveredByFixedBill, null);
+    assert.strictEqual(extra.fixedChanged, false);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 31);
+  });
+});
+
+test('applyFixedBills does not guess which off-amount charge is the bill', () => {
+  withBills('./test-fixed-ambiguous.sqlite', [{
+    id: 'rent',
+    label: 'Rent',
+    category: 'Living/Rent',
+    monthlyAmount: 1000,
+    merchantPatterns: ['landlord']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Landlord A', 3000, 1));
+    db.insertTransaction(charge('bank2', 'Landlord B', 2000, 2));
+    applyFixedBills(db, '2024-10');
+
+    const a = db.getTransaction('bank1');
+    const b = db.getTransaction('bank2');
+    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:rent:2024-10');
+    assert.ok(a);
+    assert.ok(b);
+    assert.ok(bill);
+    assert.strictEqual(a.coveredByFixedBill, null);
+    assert.strictEqual(b.coveredByFixedBill, null);
+    assert.strictEqual(a.fixedChanged, true);
+    assert.strictEqual(b.fixedChanged, true);
+    assert.strictEqual(bill.fixedChanged, true);
+    assert.strictEqual(bill.fixedMissing, false);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 5000);
+  });
+});
+
+test('coverAnyAmount covers the closest charge even when several matches are off band', () => {
+  withBills('./test-fixed-cover-any.sqlite', [{
+    id: 'rent',
+    label: 'Rent',
+    category: 'Living/Rent',
+    monthlyAmount: 1000,
+    merchantPatterns: ['landlord'],
+    coverAnyAmount: true
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Landlord A', 3000, 1));
+    db.insertTransaction(charge('bank2', 'Landlord B', 2000, 2));
+    applyFixedBills(db, '2024-10');
+
+    const closer = db.getTransaction('bank2');
+    const extra = db.getTransaction('bank1');
+    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:rent:2024-10');
+    assert.ok(closer);
+    assert.ok(extra);
+    assert.ok(bill);
+    assert.strictEqual(closer.coveredByFixedBill, 'Rent');
+    assert.strictEqual(extra.coveredByFixedBill, null);
+    assert.strictEqual(bill.fixedChanged, true);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 4000);
+  });
 });
 
 test('applyFixedBills covers a pattern match within 10% of the bill amount', () => {
