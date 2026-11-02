@@ -10,6 +10,7 @@ export interface FixedBill {
   merchantPatterns?: string[];
   activeFrom?: string;
   activeUntil?: string;
+  coverAnyAmount?: boolean;
 }
 
 interface FixedBillsConfig {
@@ -80,6 +81,10 @@ function validateFixedBills(bills: FixedBill[]): void {
     if (bill.activeUntil && !/^\d{4}-\d{2}$/.test(bill.activeUntil)) {
       throw new Error(`Bill ${bill.id} has invalid activeUntil: must be in YYYY-MM format`);
     }
+
+    if (bill.coverAnyAmount !== undefined && typeof bill.coverAnyAmount !== 'boolean') {
+      throw new Error(`Bill ${bill.id} has invalid coverAnyAmount: must be a boolean`);
+    }
   }
 }
 
@@ -109,7 +114,7 @@ export function getExpectedChargeAmount(bill: FixedBill): number {
   return bill.monthlyAmount;
 }
 
-// A bank charge is covered by a bill only when |amount - expected| / expected <= 10%.
+// True when |amount - expected| / expected <= 10%. Used to pick among several pattern matches.
 export function amountsMatchBill(chfAmount: number, expectedAmount: number): boolean {
   if (expectedAmount === 0) return chfAmount === 0;
   const diffCents = Math.abs(Math.round(chfAmount * 100) - Math.round(expectedAmount * 100));

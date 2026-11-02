@@ -393,6 +393,22 @@ export class DB {
     );
   }
 
+  flagAmountChanged(id: string): void {
+    const stmt = this.db.prepare(`
+      UPDATE transactions SET fixed_changed = 1 WHERE id = ?
+    `);
+    stmt.run(id);
+  }
+
+  setFixedReviewFlags(id: string, missing: boolean, changed: boolean): void {
+    const stmt = this.db.prepare(`
+      UPDATE transactions
+      SET fixed_missing = ?, fixed_changed = ?
+      WHERE id = ?
+    `);
+    stmt.run(missing ? 1 : 0, changed ? 1 : 0, id);
+  }
+
   getMonthTotal(yearMonth: string): number {
     const stmt = this.db.prepare(`
       SELECT SUM(chf_amount) as total

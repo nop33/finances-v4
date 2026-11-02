@@ -1,6 +1,21 @@
 import { DB } from './db.js';
 import { Transaction } from './types.js';
-import { loadFixedBills, isBillActive, isBillDue, getExpectedChargeAmount, matchesBillPattern, amountsMatchBill } from './fixed-bills.js';
+import { loadFixedBills, isBillActive, isBillDue, getExpectedChargeAmount, matchesBillPattern, amountsMatchBill, FixedBill } from './fixed-bills.js';
+
+function centsOff(amount: number, expected: number): number {
+  return Math.abs(Math.round(amount * 100) - Math.round(expected * 100));
+}
+
+function percentOff(amount: number, expected: number): number {
+  if (expected === 0) return amount === 0 ? 0 : Infinity;
+  return (Math.abs(amount - expected) / expected) * 100;
+}
+
+function closestCharge(txs: Transaction[], expected: number): Transaction {
+  return txs.reduce((best, tx) =>
+    centsOff(tx.chfAmount, expected) < centsOff(best.chfAmount, expected) ? tx : best
+  );
+}
 
 export function applyFixedBills(db: DB, yearMonth: string): void {
   const bills = loadFixedBills();
@@ -28,28 +43,88 @@ export function applyFixedBills(db: DB, yearMonth: string): void {
       reviewed: existingTx?.reviewed || false
     };
 
+    let excludeSynthetic = false;
+
     if (bill.merchantPatterns && bill.merchantPatterns.length > 0) {
-      const isDue = isBillDue(bill, yearMonth);
-      const expectedAmount = getExpectedChargeAmount(bill);
-      const bankTransactions = allTransactions.filter(tx =>
-        tx.source !== 'fixed' &&
-        matchesBillPattern(tx.merchant, bill) &&
-        amountsMatchBill(tx.chfAmount, expectedAmount)
-      );
+      const coverage = pickCoverage(bill, allTransactions, yearMonth);
+      syntheticTx.fixedMissing = coverage.missing;
+      syntheticTx.fixedChanged = coverage.changed;
+      excludeSynthetic = coverage.excludeSynthetic;
+      syntheticTx.excluded = coverage.excludeSynthetic;
 
-      if (isDue && bankTransactions.length === 0) {
-        syntheticTx.fixedMissing = true;
+      if (coverage.cover) {
+        db.markAsCoveredByFixedBill(coverage.cover.id, bill.label, coverage.changed);
       }
-
-      for (const bankTx of bankTransactions) {
-        const diff = Math.abs(bankTx.chfAmount - expectedAmount);
-        const percentDiff = (diff / expectedAmount) * 100;
-        const isChanged = percentDiff > 2;
-
-        db.markAsCoveredByFixedBill(bankTx.id, bill.label, isChanged);
+      for (const tx of coverage.flagUncovered) {
+        db.flagAmountChanged(tx.id);
       }
     }
 
     db.insertTransaction(syntheticTx);
+    db.setFixedReviewFlags(syntheticTx.id, !!syntheticTx.fixedMissing, !!syntheticTx.fixedChanged);
+    db.setExcluded(syntheticTx.id, excludeSynthetic);
   }
+}
+
+function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth: string): {
+  cover?: Transaction;
+  flagUncovered: Transaction[];
+  missing: boolean;
+  changed: boolean;
+  excludeSynthetic: boolean;
+} {
+  const isDue = isBillDue(bill, yearMonth);
+  const expectedAmount = getExpectedChargeAmount(bill);
+  const patternMatches = allTransactions.filter(tx =>
+    tx.source !== 'fixed' && matchesBillPattern(tx.merchant, bill)
+  );
+  const inBand = patternMatches.filter(tx => amountsMatchBill(tx.chfAmount, expectedAmount));
+
+  if (inBand.length > 0) {
+    const cover = closestCharge(inBand, expectedAmount);
+    return {
+      cover,
+      flagUncovered: [],
+      missing: false,
+      changed: percentOff(cover.chfAmount, expectedAmount) > 2,
+      excludeSynthetic: false
+    };
+  }
+
+  if (patternMatches.length === 1) {
+    return {
+      cover: patternMatches[0],
+      flagUncovered: [],
+      missing: false,
+      changed: true,
+      excludeSynthetic: false
+    };
+  }
+
+  if (patternMatches.length > 1 && bill.coverAnyAmount) {
+    const cover = closestCharge(patternMatches, expectedAmount);
+    return {
+      cover,
+      flagUncovered: [],
+      missing: false,
+      changed: true,
+      excludeSynthetic: false
+    };
+  }
+
+  if (patternMatches.length > 1) {
+    return {
+      flagUncovered: patternMatches,
+      missing: false,
+      changed: true,
+      excludeSynthetic: true
+    };
+  }
+
+  return {
+    flagUncovered: [],
+    missing: isDue,
+    changed: false,
+    excludeSynthetic: false
+  };
 }
