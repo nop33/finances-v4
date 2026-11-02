@@ -148,10 +148,34 @@ test('applyFixedBills does not cover a single off-band same-merchant purchase', 
     assert.ok(bill);
     assert.strictEqual(bank.coveredByFixedBill, null);
     assert.strictEqual(bank.fixedChanged, true);
-    assert.strictEqual(bill.fixedChanged, true);
-    assert.strictEqual(bill.fixedMissing, false);
+    assert.strictEqual(bill.fixedChanged, false);
+    assert.strictEqual(bill.fixedMissing, true);
     assert.strictEqual(bill.excluded, false);
     assert.strictEqual(db.getMonthTotal('2024-10'), 60);
+  });
+});
+
+test('applyFixedBills does not mark an annual bill missing outside its renewal month', () => {
+  withBills('./test-fixed-off-band-not-due.sqlite', [{
+    id: 'tools',
+    label: 'Yearly tools',
+    category: 'Tech/Phone',
+    monthlyAmount: 10,
+    renewalMonth: 10,
+    merchantPatterns: ['^tool']
+  }], db => {
+    db.insertTransaction({ ...charge('bank1', 'Tool 50', 50), date: '2024-11-05' });
+    applyFixedBills(db, '2024-11');
+
+    const bank = db.getTransaction('bank1');
+    const bill = db.getTransactionsByMonth('2024-11').find(t => t.id === 'fixed:tools:2024-11');
+    assert.ok(bank);
+    assert.ok(bill);
+    assert.strictEqual(bank.coveredByFixedBill, null);
+    assert.strictEqual(bank.fixedChanged, true);
+    assert.strictEqual(bill.fixedMissing, false);
+    assert.strictEqual(bill.fixedChanged, false);
+    assert.strictEqual(db.getMonthTotal('2024-11'), 60);
   });
 });
 
@@ -223,8 +247,8 @@ test('applyFixedBills does not guess which off-amount charge is the bill', () =>
     assert.strictEqual(b.coveredByFixedBill, null);
     assert.strictEqual(a.fixedChanged, true);
     assert.strictEqual(b.fixedChanged, true);
-    assert.strictEqual(bill.fixedChanged, true);
-    assert.strictEqual(bill.fixedMissing, false);
+    assert.strictEqual(bill.fixedChanged, false);
+    assert.strictEqual(bill.fixedMissing, true);
     assert.strictEqual(bill.excluded, false);
     assert.strictEqual(db.getMonthTotal('2024-10'), 6000);
   });
