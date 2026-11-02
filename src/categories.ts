@@ -3,7 +3,7 @@ import { Category } from './types.js';
 
 interface CategoryConfig {
   columns: Array<{
-    column: string;
+    column?: string;
     group?: string;
     header: string;
     role: string;
@@ -46,6 +46,7 @@ export function loadCategories(configPath?: string): Category[] {
   const savingsGroups = new Set(tierGroups.savings || []);
 
   const categories: Category[] = [];
+  const seenColumns = new Set<string>();
 
   for (const col of config.columns) {
     if (col.role === 'leaf_category' && col.group) {
@@ -61,8 +62,21 @@ export function loadCategories(configPath?: string): Category[] {
         tier = 'want';
       }
 
+      const column = col.column || '';
+      if (column) {
+        if (!isSheetColumn(column)) {
+          throw new Error(
+            `Category ${col.group}/${col.header} has invalid column "${column}": must be a sheet letter from C to CL`
+          );
+        }
+        if (seenColumns.has(column)) {
+          throw new Error(`Duplicate sheet column ${column} in category config`);
+        }
+        seenColumns.add(column);
+      }
+
       categories.push({
-        column: col.column,
+        column,
         group: col.group,
         leaf: col.header,
         tier,
@@ -71,4 +85,21 @@ export function loadCategories(configPath?: string): Category[] {
   }
 
   return categories;
+}
+
+const MIN_LEAF_COLUMN = columnIndex('C');
+const MAX_LEAF_COLUMN = columnIndex('CL');
+
+export function columnIndex(column: string): number {
+  let n = 0;
+  for (const ch of column) {
+    n = n * 26 + (ch.charCodeAt(0) - 64);
+  }
+  return n;
+}
+
+export function isSheetColumn(column: string): boolean {
+  if (!/^[A-Z]{1,2}$/.test(column)) return false;
+  const index = columnIndex(column);
+  return index >= MIN_LEAF_COLUMN && index <= MAX_LEAF_COLUMN;
 }

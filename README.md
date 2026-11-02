@@ -93,6 +93,9 @@ node dist/cli.js import exports/cembra.csv exports/neon.csv
 node dist/cli.js categorise --month 2024-10
 node dist/cli.js list --month 2024-10
 node dist/cli.js correct <txId> Meals/Snacks
+node dist/cli.js ledger --month 2024-10 --out /tmp/2024-10-ledger.csv
+node dist/cli.js expences-row --month 2024-10 --out /tmp/2024-10-expences.json
+node dist/cli.js summary --month 2024-10
 ```
 
 ### Commands
@@ -101,6 +104,9 @@ node dist/cli.js correct <txId> Meals/Snacks
 - **categorise --month YYYY-MM**: Auto-categorise all unreviewed transactions for the specified month
 - **list --month YYYY-MM**: List all transactions for the specified month
 - **correct <txId> <category>**: Manually correct a transaction's category, teaching merchant memory for future similar transactions
+- **ledger --month YYYY-MM --out file.csv**: Counted (non-excluded, not covered-by-bill) transactions as CSV. Splits become one row per part. Columns: date, source, merchant, amount, category, splitwise_adjustment, reviewed. Sorted by date then id. A bank charge on the same day with a matching Splitwise merchant gets that share in `splitwise_adjustment`.
+- **expences-row --month YYYY-MM --out file.json**: One monthly Expences row from `CATEGORY_CONFIG` leaf columns (letters C–CL). JSON `{month, cells, unmapped, total, cellsSum}`. Every mapped column is present (0 if no spend). Categories with spend but no column are listed in `unmapped`. Formula columns are not written.
+- **summary --month YYYY-MM**: Total, top 5 categories, flagged row count (`fixedChanged`, `fixedMissing`, confidence below 0.7), and month-over-month delta when the previous month exists in the DB.
 
 ## Schema
 
