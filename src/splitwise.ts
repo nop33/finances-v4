@@ -134,6 +134,7 @@ async function bookSplitwiseExpense(
     fxConversionFailed,
     fileRowIndex: 0,
     importedAt,
+    kind: 'expense',
     // Preserve existing categorization on re-import
     category: existing?.category,
     confidence: existing?.confidence,

@@ -107,5 +107,6 @@ export function parseSbb(content: string): ParsedTransaction[] {
     originalCurrency: 'CHF',
     source: 'sbb',
     fileRowIndex: 0,
+    kind: 'expense',
   }];
 }
