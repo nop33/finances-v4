@@ -6,6 +6,7 @@ import { importTransactions } from './import.js';
 import { categorizeMonth, correctTransaction } from './categorize.js';
 import { applyFixedBills } from './fixed.js';
 import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
+import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
 import { startServer } from './web-server.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -23,6 +24,7 @@ function printUsage() {
   finances list --month YYYY-MM                 List transactions for a month
   finances categorise --month YYYY-MM           Auto-categorise transactions for a month
   finances correct <txId> <category>            Correct a transaction's category
+  finances split <txId> <category>=<chf> [...]  Split one charge across categories
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
   finances total --month YYYY-MM                Show month total (excludes covered charges)
   finances serve [--port 4321] [--host 127.0.0.1]  Start web review server
@@ -107,6 +109,13 @@ try {
       console.log(
         `${tx.date}  ${tx.merchant.padEnd(30)}  CHF ${tx.chfAmount.toFixed(2)}${fxInfo}`
       );
+      if (tx.splits && tx.splits.length > 0) {
+        for (const part of tx.splits) {
+          console.log(
+            `          ${part.category.padEnd(30)}  CHF ${part.chfAmount.toFixed(2)}`
+          );
+        }
+      }
     }
 
     const total = transactions.reduce((sum, tx) => sum + tx.chfAmount, 0);
@@ -148,6 +157,24 @@ try {
     console.log(`Correcting transaction ${txId} to category ${category}...`);
     correctTransaction(db, txId, category);
     console.log(`Done. Merchant memory updated.`);
+  } else if (command === 'split') {
+    const txId = args[1];
+    if (!txId || args.length < 4) {
+      console.error('Error: Usage: finances split <txId> <category>=<chf> [<category>=<chf> ...]');
+      process.exit(1);
+    }
+
+    try {
+      const parts = parseSplitParts(args.slice(2));
+      splitTransaction(db, txId, parts);
+      console.log(`Split ${txId} into ${parts.length} parts:`);
+      for (const part of parts) {
+        console.log(`  ${part.category}: CHF ${part.chfAmount.toFixed(2)}`);
+      }
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
   } else if (command === 'fixed' && args[1] === 'apply') {
     const monthIndex = args.indexOf('--month');
     if (monthIndex === -1 || !args[monthIndex + 1]) {
@@ -179,6 +206,14 @@ try {
 
     const total = db.getMonthTotal(month);
     console.log(`\nTotal for ${month}: CHF ${total.toFixed(2)}`);
+    const byCategory = getCategoryTotals(db, month);
+    const categories = Object.keys(byCategory).sort();
+    if (categories.length > 0) {
+      console.log('By category:');
+      for (const category of categories) {
+        console.log(`  ${category}: CHF ${byCategory[category].toFixed(2)}`);
+      }
+    }
     console.log(`(Excludes bank charges covered by fixed bills)\n`);
   } else if (command === 'splitwise' && args[1] === 'import') {
     const monthIndex = args.indexOf('--month');
