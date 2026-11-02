@@ -25,6 +25,8 @@ export interface Transaction {
   fixedMissing?: boolean;
   fixedChanged?: boolean;
   coveredByFixedBill?: string;
+  kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
+  excluded?: boolean;
 }
 
 export interface Category {
@@ -51,6 +53,7 @@ export interface ParsedTransaction {
   source: string;
   sourceCard?: string;
   fileRowIndex: number;
+  kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
 }
 
 export interface ParserResult {
@@ -69,5 +72,10 @@ export interface CategorizationRule {
   id?: number;
   pattern: string;
   category: string;
+  description?: string;
+}
+
+export interface ExcludeRule {
+  pattern: string;
   description?: string;
 }

@@ -25,7 +25,8 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
 
     const startedDate = row['Started Date'];
     const merchant = row['Description'] || '';
-    const description = row['Type'] || '';
+    const type = row['Type'] || '';
+    const description = type;
     const amount = parseFloat(row['Amount']) || 0;
     const currency = row['Currency'] || 'CHF';
 
@@ -36,6 +37,20 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     // We use convention: spending positive, credits/income negative
     const originalAmount = -normalizeAmount(amount);
 
+    // Map Revolut Type to transaction kind
+    let kind: ParsedTransaction['kind'] = 'expense';
+    const typeLower = type.toLowerCase();
+    if (typeLower === 'topup' || typeLower === 'top-up') {
+      kind = 'top-up';
+    } else if (typeLower === 'transfer') {
+      kind = 'transfer';
+    } else if (typeLower === 'exchange') {
+      kind = 'exchange';
+    } else if (amount > 0) {
+      // Positive amount in CSV means income
+      kind = 'income';
+    }
+
     transactions.push({
       date,
       merchant,
@@ -44,6 +59,7 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
       originalCurrency: currency,
       source: 'revolut',
       fileRowIndex: index,
+      kind,
     });
   });
 

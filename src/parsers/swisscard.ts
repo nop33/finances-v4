@@ -23,6 +23,15 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
     const isCredit = debitCredit === 'Credit';
     const originalAmount = isCredit ? -normalizeAmount(amount) : normalizeAmount(amount);
 
+    // Detect transaction kind
+    let kind: ParsedTransaction['kind'] = 'expense';
+    const descLower = description.toLowerCase();
+    const merchantLower = merchant.toLowerCase();
+    if (isCredit && (descLower.includes('payment') || merchantLower.includes('swisscard') || 
+        descLower.includes('card payment') || descLower.includes('bill payment'))) {
+      kind = 'card-payment';
+    }
+
     transactions.push({
       date,
       merchant,
@@ -32,6 +41,7 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
       source: 'swisscard',
       sourceCard: cardNumber,
       fileRowIndex: index,
+      kind,
     });
   });
 

@@ -163,7 +163,7 @@ export function categorizeMonth(db: DB, yearMonth: string): void {
   const transactions = db.getTransactionsByMonth(yearMonth);
 
   for (const tx of transactions) {
-    if (tx.reviewed) {
+    if (tx.reviewed || tx.excluded) {
       continue;
     }
 

@@ -99,4 +99,52 @@ describe('Import module', () => {
     assert.strictEqual(tx.chfAmount, 100);
     assert.strictEqual(tx.fxRate, 0.95);
   });
+
+  it('should exclude transfers, income, and top-ups by kind', async () => {
+    const parsed: ParsedTransaction[] = [
+      {
+        date: '2024-10-18',
+        merchant: 'MIGROS',
+        originalAmount: 50,
+        originalCurrency: 'CHF',
+        source: 'revolut',
+        fileRowIndex: 0,
+        kind: 'expense',
+      },
+      {
+        date: '2024-10-18',
+        merchant: 'Salary',
+        originalAmount: -5000,
+        originalCurrency: 'CHF',
+        source: 'revolut',
+        fileRowIndex: 1,
+        kind: 'income',
+      },
+      {
+        date: '2024-10-18',
+        merchant: 'Bank transfer',
+        originalAmount: 100,
+        originalCurrency: 'CHF',
+        source: 'neon',
+        fileRowIndex: 2,
+        kind: 'transfer',
+      },
+    ];
+
+    await importTransactions(db, parsed);
+
+    const transactions = db.getTransactionsByMonth('2024-10');
+    const expense = transactions.find(t => t.merchant === 'MIGROS' && t.date === '2024-10-18');
+    const income = transactions.find(t => t.merchant === 'Salary');
+    const transfer = transactions.find(t => t.merchant === 'Bank transfer');
+
+    assert.ok(expense);
+    assert.strictEqual(expense.excluded, false);
+    
+    assert.ok(income);
+    assert.strictEqual(income.excluded, true);
+    
+    assert.ok(transfer);
+    assert.strictEqual(transfer.excluded, true);
+  });
 });
