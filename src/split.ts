@@ -32,7 +32,7 @@ export function getCategoryTotals(db: DB, yearMonth: string): Record<string, num
   const transactions = db.getTransactionsByMonth(yearMonth);
 
   for (const tx of transactions) {
-    if (tx.coveredByFixedBill) continue;
+    if (tx.coveredByFixedBill || tx.excluded) continue;
 
     if (tx.splits && tx.splits.length > 0) {
       for (const part of tx.splits) {

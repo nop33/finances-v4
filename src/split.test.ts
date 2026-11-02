@@ -4,6 +4,8 @@ import { unlinkSync } from 'fs';
 import { DB } from './db.js';
 import { Transaction } from './types.js';
 import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
+import { parseRevolutCsv } from './parsers/revolut.js';
+import { importTransactions } from './import.js';
 
 function insertTx(db: DB, tx: Partial<Transaction> & { id: string; chfAmount: number }): void {
   db.insertTransaction({
@@ -123,6 +125,42 @@ test('month list keeps the original row and shows its parts', () => {
       { category: 'Shopping', chfAmount: 15 },
       { category: 'General gifts', chfAmount: 25 }
     ]);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('category totals skip excluded Revolut top-ups and transfers and still match the grand total after a split', async () => {
+  const dbPath = './test-split-exclude-totals.sqlite';
+  const db = new DB(dbPath);
+  try {
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Card Payment,Current,2024-11-01 10:30:00,2024-11-01 10:30:05,COOP,-40.00,0,CHF,COMPLETED,1000.00
+Card Payment,Current,2024-11-02 10:30:00,2024-11-02 10:30:05,MIGROS,-20.00,0,CHF,COMPLETED,980.00
+Topup,Current,2024-11-03 09:00:00,2024-11-03 09:00:05,Top-up from debit card,200.00,0,CHF,COMPLETED,1180.00
+Transfer,Current,2024-11-04 09:00:00,2024-11-04 09:00:15,To savings space,-50.00,0,CHF,COMPLETED,1130.00`;
+
+    await importTransactions(db, parseRevolutCsv(csv));
+
+    const coop = db.getTransactionsByMonth('2024-11').find(t => t.merchant === 'COOP');
+    assert.ok(coop);
+    splitTransaction(db, coop.id, [
+      { category: 'Shopping', chfAmount: 25 },
+      { category: 'General gifts', chfAmount: 15 }
+    ]);
+
+    const grand = db.getMonthTotal('2024-11');
+    const totals = getCategoryTotals(db, '2024-11');
+    const categorySum = Object.values(totals).reduce((sum, n) => sum + n, 0);
+
+    assert.strictEqual(grand, 60);
+    assert.strictEqual(Math.round(categorySum * 100), Math.round(grand * 100));
+    assert.strictEqual(totals['Shopping'], 25);
+    assert.strictEqual(totals['General gifts'], 15);
+    assert.strictEqual(totals['(uncategorised)'], 20);
+    assert.ok(!Object.values(totals).includes(-200), 'Topup must not appear in category totals');
+    assert.ok(!Object.values(totals).includes(50), 'Transfer must not appear in category totals');
   } finally {
     db.close();
     unlinkSync(dbPath);
