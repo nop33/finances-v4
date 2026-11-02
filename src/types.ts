@@ -27,6 +27,7 @@ export interface Transaction {
   coveredByFixedBill?: string;
   kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
   excluded?: boolean;
+  splits?: TransactionSplit[];
 }
 
 export interface Category {
@@ -78,4 +79,9 @@ export interface CategorizationRule {
 export interface ExcludeRule {
   pattern: string;
   description?: string;
+}
+
+export interface TransactionSplit {
+  category: string;
+  chfAmount: number;
 }

@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { Transaction, FxRate } from './types.js';
+import { Transaction, FxRate, TransactionSplit } from './types.js';
 
 export class DB {
   private db: Database.Database;
@@ -70,6 +70,16 @@ export class DB {
         category TEXT NOT NULL,
         description TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS transaction_splits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transaction_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        chf_amount REAL NOT NULL,
+        FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_splits_transaction ON transaction_splits(transaction_id);
     `);
   }
 
@@ -177,18 +187,7 @@ export class DB {
       ORDER BY date, file_row_index
     `);
     const rows = stmt.all(yearMonth) as any[];
-    return rows.map(row => ({
-      ...row,
-      fxConversionFailed: !!row.fxConversionFailed,
-      reviewed: !!row.reviewed,
-      newMerchant: !!row.newMerchant,
-      unusualAmount: !!row.unusualAmount,
-      possibleDuplicate: !!row.possibleDuplicate,
-      unconvertedFx: !!row.unconvertedFx,
-      fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged,
-      excluded: !!row.excluded
-    }));
+    return this.attachSplits(rows.map(row => this.mapTransaction(row)));
   }
 
   saveFxRate(rate: FxRate): void {
@@ -227,18 +226,7 @@ export class DB {
     `);
     const row = stmt.get(id) as any;
     if (!row) return undefined;
-    return {
-      ...row,
-      fxConversionFailed: !!row.fxConversionFailed,
-      reviewed: !!row.reviewed,
-      newMerchant: !!row.newMerchant,
-      unusualAmount: !!row.unusualAmount,
-      possibleDuplicate: !!row.possibleDuplicate,
-      unconvertedFx: !!row.unconvertedFx,
-      fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged,
-      excluded: !!row.excluded
-    };
+    return this.attachSplits([this.mapTransaction(row)])[0];
   }
 
   deleteTransaction(id: string): void {
@@ -338,18 +326,7 @@ export class DB {
       ORDER BY date DESC
     `);
     const rows = stmt.all(normalizedMerchant) as any[];
-    return rows.map(row => ({
-      ...row,
-      fxConversionFailed: !!row.fxConversionFailed,
-      reviewed: !!row.reviewed,
-      newMerchant: !!row.newMerchant,
-      unusualAmount: !!row.unusualAmount,
-      possibleDuplicate: !!row.possibleDuplicate,
-      unconvertedFx: !!row.unconvertedFx,
-      fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged,
-      excluded: !!row.excluded
-    }));
+    return this.attachSplits(rows.map(row => this.mapTransaction(row)));
   }
 
   getTransactionsByDateRange(startDate: string, endDate: string): Transaction[] {
@@ -371,18 +348,7 @@ export class DB {
       ORDER BY date, file_row_index
     `);
     const rows = stmt.all(startDate, endDate) as any[];
-    return rows.map(row => ({
-      ...row,
-      fxConversionFailed: !!row.fxConversionFailed,
-      reviewed: !!row.reviewed,
-      newMerchant: !!row.newMerchant,
-      unusualAmount: !!row.unusualAmount,
-      possibleDuplicate: !!row.possibleDuplicate,
-      unconvertedFx: !!row.unconvertedFx,
-      fixedMissing: !!row.fixedMissing,
-      fixedChanged: !!row.fixedChanged,
-      excluded: !!row.excluded
-    }));
+    return this.attachSplits(rows.map(row => this.mapTransaction(row)));
   }
 
   getAllRules(): Array<{ id: number; pattern: string; category: string; description?: string }> {
@@ -437,6 +403,93 @@ export class DB {
     `);
     const result = stmt.get(yearMonth) as { total: number | null };
     return result.total || 0;
+  }
+
+  setSplits(transactionId: string, splits: TransactionSplit[]): void {
+    const tx = this.getTransaction(transactionId);
+    if (!tx) {
+      throw new Error(`Transaction ${transactionId} not found`);
+    }
+    if (splits.length < 2) {
+      throw new Error('A split needs at least two parts');
+    }
+    for (const part of splits) {
+      if (!part.category.trim()) {
+        throw new Error('Each split part needs a category');
+      }
+      if (!Number.isFinite(part.chfAmount)) {
+        throw new Error(`Invalid amount for ${part.category}`);
+      }
+    }
+
+    const sumCents = splits.reduce((acc, s) => acc + Math.round(s.chfAmount * 100), 0);
+    const txCents = Math.round(tx.chfAmount * 100);
+    if (sumCents !== txCents) {
+      const sum = (sumCents / 100).toFixed(2);
+      throw new Error(`Split amounts (${sum}) must sum to transaction amount (${tx.chfAmount.toFixed(2)})`);
+    }
+
+    const replace = this.db.transaction((parts: TransactionSplit[]) => {
+      this.db.prepare('DELETE FROM transaction_splits WHERE transaction_id = ?').run(transactionId);
+      const insert = this.db.prepare(`
+        INSERT INTO transaction_splits (transaction_id, category, chf_amount)
+        VALUES (?, ?, ?)
+      `);
+      for (const part of parts) {
+        insert.run(transactionId, part.category, part.chfAmount);
+      }
+    });
+    replace(splits);
+  }
+
+  getSplits(transactionId: string): TransactionSplit[] {
+    const stmt = this.db.prepare(`
+      SELECT category, chf_amount as chfAmount
+      FROM transaction_splits
+      WHERE transaction_id = ?
+      ORDER BY id
+    `);
+    return stmt.all(transactionId) as TransactionSplit[];
+  }
+
+  private mapTransaction(row: any): Transaction {
+    return {
+      ...row,
+      fxConversionFailed: !!row.fxConversionFailed,
+      reviewed: !!row.reviewed,
+      newMerchant: !!row.newMerchant,
+      unusualAmount: !!row.unusualAmount,
+      possibleDuplicate: !!row.possibleDuplicate,
+      unconvertedFx: !!row.unconvertedFx,
+      fixedMissing: !!row.fixedMissing,
+      fixedChanged: !!row.fixedChanged,
+      excluded: !!row.excluded
+    };
+  }
+
+  private attachSplits(transactions: Transaction[]): Transaction[] {
+    if (transactions.length === 0) return transactions;
+
+    const ids = transactions.map(t => t.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT transaction_id as transactionId, category, chf_amount as chfAmount
+      FROM transaction_splits
+      WHERE transaction_id IN (${placeholders})
+      ORDER BY id
+    `).all(...ids) as Array<{ transactionId: string; category: string; chfAmount: number }>;
+
+    const byId = new Map<string, TransactionSplit[]>();
+    for (const row of rows) {
+      const list = byId.get(row.transactionId) || [];
+      list.push({ category: row.category, chfAmount: row.chfAmount });
+      byId.set(row.transactionId, list);
+    }
+
+    return transactions.map(tx => {
+      const splits = byId.get(tx.id);
+      return splits && splits.length > 0 ? { ...tx, splits } : tx;
+    });
   }
 
   close(): void {
