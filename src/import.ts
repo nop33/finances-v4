@@ -4,10 +4,16 @@ import { Transaction, ParsedTransaction } from './types.js';
 import { importTransactionId, repairMojibake } from './parsers/utils.js';
 import { loadExcludeRules, shouldExclude } from './exclude.js';
 
+export type ImportStats = { new: number; unchanged: number };
+
+export function formatImportStats(stats: ImportStats): string {
+  return `${stats.new} new, ${stats.unchanged} unchanged`;
+}
+
 export async function importTransactions(
   db: DB,
   parsedTransactions: ParsedTransaction[]
-): Promise<void> {
+): Promise<ImportStats> {
   const fx = new FxConverter(db);
   const transactions: Transaction[] = [];
   const importedAt = new Date().toISOString();
@@ -68,5 +74,11 @@ export async function importTransactions(
     });
   }
 
+  const stats: ImportStats = { new: 0, unchanged: 0 };
+  for (const tx of transactions) {
+    if (db.getTransaction(tx.id)) stats.unchanged++;
+    else stats.new++;
+  }
   db.insertTransactions(transactions);
+  return stats;
 }

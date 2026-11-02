@@ -1,9 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
 import { parseSbb } from './sbb.js';
 import { DB } from '../db.js';
 import { importTransactions } from '../import.js';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -268,13 +269,15 @@ ZVV Day Pass (calendar day)`;
       const parsed = parseSbb(receipt);
       
       // First import
-      await importTransactions(db, parsed);
+      const first = await importTransactions(db, parsed);
+      assert.deepStrictEqual(first, { new: 1, unchanged: 0 });
       let allTxs = db.getTransactionsByMonth('2025-02');
       assert.strictEqual(allTxs.length, 1);
       const firstId = allTxs[0].id;
 
       // Re-import same receipt
-      await importTransactions(db, parsed);
+      const second = await importTransactions(db, parsed);
+      assert.deepStrictEqual(second, { new: 0, unchanged: 1 });
       allTxs = db.getTransactionsByMonth('2025-02');
       
       // Should still be 1 transaction (updated, not duplicated)
@@ -282,6 +285,45 @@ ZVV Day Pass (calendar day)`;
       assert.strictEqual(allTxs[0].id, firstId);
     } finally {
       db.close();
+      rmSync(tempDir, { recursive: true });
+    }
+  });
+
+  it('CLI reports 0 new, 1 unchanged when the same receipt is imported twice', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'sbb-cli-'));
+    const receiptPath = join(tempDir, 'receipt.txt');
+    const dbPath = join(tempDir, 'finances.sqlite');
+    writeFileSync(receiptPath, `+++ EasyRide purchase receipt – your journeys on 03.02.2025
+Order number 100000000001
+
+Payment method
+Half Fare Travelcard PLUS
+
+Amount
+CHF 7.40
+
+Item
+
+ZVV Day Pass (calendar day)
+Total
+CHF 7.40`);
+
+    const run = () => spawnSync(
+      process.execPath,
+      ['dist/cli.js', 'sbb', 'import', receiptPath],
+      { encoding: 'utf8', env: { ...process.env, DB_PATH: dbPath } }
+    );
+
+    try {
+      const first = run();
+      assert.strictEqual(first.status, 0, first.stderr);
+      assert.match(first.stdout, /1 new, 0 unchanged/);
+
+      const second = run();
+      assert.strictEqual(second.status, 0, second.stderr);
+      assert.match(second.stdout, /0 new, 1 unchanged/);
+      assert.doesNotMatch(second.stdout, /1 imported/);
+    } finally {
       rmSync(tempDir, { recursive: true });
     }
   });
