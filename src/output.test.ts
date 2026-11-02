@@ -219,6 +219,12 @@ test('summary reports total, top categories, flagged count, and month-over-month
       { category: 'Misc/Unmapped', amount: 8 },
     ]);
     assert.strictEqual(summary.flagged, 2);
+    assert.deepStrictEqual(summary.flaggedBreakdown, {
+      fixedChanged: 1,
+      fixedMissing: 0,
+      lowConfidence: 1,
+      newMerchant: 0,
+    });
     assert.strictEqual(summary.previousMonth, '2024-09');
     assert.strictEqual(summary.delta, -27);
 
@@ -227,8 +233,78 @@ test('summary reports total, top categories, flagged count, and month-over-month
     assert.match(text, /Total: 73\.00/);
     assert.match(text, /Meals\/Snacks: 35\.00/);
     assert.match(text, /Flagged: 2/);
+    assert.match(text, /fixedChanged: 1/);
+    assert.match(text, /low confidence: 1/);
     assert.match(text, /vs 2024-09: -27\.00/);
   });
+});
+
+test('summary flagged skips excluded and covered rows and does not treat missing confidence as low', () => {
+  const dbPath = './test-output-flagged-skip.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'excluded-low',
+      date: '2024-10-01',
+      merchant: 'Hidden',
+      chfAmount: 10,
+      excluded: true,
+      confidence: 0.1,
+      newMerchant: true,
+    });
+    insertTx(db, {
+      id: 'covered-changed',
+      date: '2024-10-02',
+      merchant: 'Landlord',
+      chfAmount: 1000,
+      coveredByFixedBill: 'Rent',
+      fixedChanged: true,
+      confidence: 0.2,
+    });
+    insertTx(db, {
+      id: 'plain',
+      date: '2024-10-03',
+      merchant: 'COOP',
+      chfAmount: 12,
+      category: 'Meals/Snacks',
+    });
+    insertTx(db, {
+      id: 'missing-bill',
+      date: '2024-10-04',
+      source: 'fixed',
+      merchant: 'Gym',
+      chfAmount: 40,
+      category: 'Living/Gym',
+      fixedMissing: true,
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'new-shop',
+      date: '2024-10-05',
+      merchant: 'New Shop',
+      chfAmount: 5,
+      category: 'Shopping/Purchases',
+      newMerchant: true,
+      confidence: 0.9,
+    });
+
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.flagged, 2);
+    assert.deepStrictEqual(summary.flaggedBreakdown, {
+      fixedChanged: 0,
+      fixedMissing: 1,
+      lowConfidence: 0,
+      newMerchant: 1,
+    });
+    const text = formatSummary(summary);
+    assert.match(text, /Flagged: 2/);
+    assert.match(text, /fixedMissing: 1/);
+    assert.match(text, /new merchant: 1/);
+    assert.match(text, /low confidence: 0/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
 });
 
 test('summary omits month-over-month delta when the previous month is empty', () => {
