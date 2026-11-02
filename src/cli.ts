@@ -13,7 +13,7 @@ import { dirname } from 'path';
 const args = process.argv.slice(2);
 const command = args[0];
 
-if (!command) {
+function printUsage() {
   console.log(`Usage:
   finances import <file1> [file2 ...]           Import transaction files
   finances sbb import <file1.txt> [file2.txt ...]  Import SBB EasyRide receipt files
@@ -27,6 +27,10 @@ if (!command) {
   finances total --month YYYY-MM                Show month total (excludes covered charges)
   finances serve [--port 4321] [--host 127.0.0.1]  Start web review server
 `);
+}
+
+if (!command || command === '--help' || command === '-h') {
+  printUsage();
   process.exit(0);
 }
 
