@@ -1,6 +1,21 @@
 import Papa from 'papaparse';
-import { ParsedTransaction } from '../types.js';
+import { existsSync, readFileSync } from 'fs';
+import { ParsedTransaction, ExcludeRule } from '../types.js';
 import { normalizeAmount } from './utils.js';
+
+function loadTransferPatterns(): string[] {
+  const configPath = process.env.EXCLUDE_RULES_CONFIG || './.exclude-rules.json';
+  if (!existsSync(configPath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(configPath, 'utf-8'));
+    const rules: ExcludeRule[] = Array.isArray(data) ? data : [];
+    return rules
+      .filter(rule => rule.kind === 'transfer' && rule.pattern)
+      .map(rule => rule.pattern.toLowerCase());
+  } catch {
+    return [];
+  }
+}
 
 export function parseNeon(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, {
@@ -10,6 +25,7 @@ export function parseNeon(content: string): ParsedTransaction[] {
   });
 
   const transactions: ParsedTransaction[] = [];
+  const transferPatterns = loadTransferPatterns();
 
   result.data.forEach((row: any, index: number) => {
     const date = row['Date'];
@@ -27,6 +43,7 @@ export function parseNeon(content: string): ParsedTransaction[] {
     let kind: ParsedTransaction['kind'] = 'expense';
     const merchantLower = merchant.toLowerCase();
     const descriptionLower = (description || '').toLowerCase();
+    const haystack = `${merchantLower} ${descriptionLower}`;
     
     // Incoming money (positive in CSV, becomes negative in our convention)
     if (amount > 0) {
@@ -36,6 +53,12 @@ export function parseNeon(content: string): ParsedTransaction[] {
     if (merchantLower.includes('neon') || descriptionLower.includes('transfer') || 
         merchantLower.includes('transfer')) {
       kind = 'transfer';
+    }
+    for (const pattern of transferPatterns) {
+      if (haystack.includes(pattern)) {
+        kind = 'transfer';
+        break;
+      }
     }
 
     transactions.push({
