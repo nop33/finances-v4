@@ -35,6 +35,11 @@ export function normalizeAmount(amount: number): number {
   return amount;
 }
 
+export function swisscardSignedAmount(amount: number, isCredit: boolean): number {
+  const magnitude = Math.abs(normalizeAmount(amount));
+  return isCredit ? -magnitude : magnitude;
+}
+
 // Bytes 0x80-0x9F that Windows-1252 maps to punctuation (not latin1 C1 controls).
 const CP1252_EXTRA: Record<number, number> = {
   0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84,
