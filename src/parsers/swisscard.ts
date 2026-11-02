@@ -14,8 +14,12 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
     const currency = row['Currency'] || 'CHF';
     const amount = parseFloat(row['Amount']) || 0;
     const debitCredit = row['Debit/Credit'];
+    const status = row['Status'] || '';
 
     if (!transactionDate) return;
+    
+    // Skip pending transactions
+    if (status.toLowerCase() === 'pending') return;
 
     const date = parseDate(transactionDate, 'DD.MM.YYYY');
     

@@ -34,4 +34,17 @@ describe('Swisscard parser', () => {
     assert.strictEqual(transactions[0].originalAmount, 42.30, 'Debit should be positive');
     assert.strictEqual(transactions[1].originalAmount, -15.00, 'Credit should be negative');
   });
+
+  it('should filter out pending transactions', () => {
+    const csv = `Transaction date,Description,Merchant,Card number,Currency,Amount,Debit/Credit,Status,Merchant Category,Registered Category
+01.10.2024,Purchase,MIGROS,5555,CHF,42.30,Debit,Posted,Groceries,
+02.10.2024,Online order,AMAZON,5555,CHF,89.50,Debit,Pending,Shopping,
+03.10.2024,Restaurant,TIBITS,5555,CHF,28.50,Debit,Posted,Food,`;
+
+    const transactions = parseSwisscard(csv);
+
+    assert.strictEqual(transactions.length, 2);
+    assert.strictEqual(transactions[0].merchant, 'MIGROS');
+    assert.strictEqual(transactions[1].merchant, 'TIBITS');
+  });
 });
