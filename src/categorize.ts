@@ -163,7 +163,8 @@ export function categorizeMonth(db: DB, yearMonth: string): void {
   const transactions = db.getTransactionsByMonth(yearMonth);
 
   for (const tx of transactions) {
-    if (tx.reviewed || tx.excluded) {
+    // Skip if reviewed, excluded, or already has a category (from fixed bills or manual correction)
+    if (tx.reviewed || tx.excluded || tx.category) {
       continue;
     }
 

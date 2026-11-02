@@ -645,3 +645,55 @@ test('correction changing merchant category resets confidence', () => {
     unlinkSync(dbPath);
   }
 });
+
+test('categorizeMonth does not blank transactions with existing categories', () => {
+  const dbPath = './test-categorize-preserve-existing.sqlite';
+  const db = new DB(dbPath);
+
+  try {
+    const txs: Transaction[] = [
+      {
+        id: 'test1',
+        date: '2024-10-01',
+        source: 'fixed',
+        merchant: 'Monthly Rent',
+        originalAmount: 1000,
+        originalCurrency: 'CHF',
+        chfAmount: 1000,
+        fileRowIndex: 0,
+        importedAt: new Date().toISOString(),
+        category: 'Living/Rent',
+        confidence: 1.0,
+        explanation: 'fixed bill: Monthly Rent'
+      },
+      {
+        id: 'test2',
+        date: '2024-10-05',
+        source: 'test',
+        merchant: 'Unknown Store',
+        originalAmount: 20,
+        originalCurrency: 'CHF',
+        chfAmount: 20,
+        fileRowIndex: 1,
+        importedAt: new Date().toISOString()
+      }
+    ];
+
+    for (const tx of txs) {
+      db.insertTransaction(tx);
+    }
+
+    categorizeMonth(db, '2024-10');
+
+    const fixedTx = db.getTransaction('test1');
+    const uncategorizedTx = db.getTransaction('test2');
+
+    assert.strictEqual(fixedTx?.category, 'Living/Rent', 'Fixed bill category should be preserved');
+    assert.strictEqual(fixedTx?.confidence, 1.0, 'Fixed bill confidence should be preserved');
+    
+    assert.strictEqual(uncategorizedTx?.category, '', 'Uncategorized transaction should remain uncategorized');
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
