@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { unlinkSync } from 'fs';
 import { parseSwisscard } from './swisscard.js';
+import { importTransactions } from '../import.js';
+import { DB } from '../db.js';
 
 describe('Swisscard parser', () => {
   it('should parse Swisscard CSV correctly', () => {
@@ -33,6 +36,33 @@ describe('Swisscard parser', () => {
     assert.strictEqual(transactions.length, 2);
     assert.strictEqual(transactions[0].originalAmount, 42.30, 'Debit should be positive');
     assert.strictEqual(transactions[1].originalAmount, -15.00, 'Credit should be negative');
+  });
+
+  it('keeps already-signed Credit amounts negative', () => {
+    const csv = `Transaction date,Description,Merchant,Card number,Currency,Amount,Debit/Credit,Status,Merchant Category,Registered Category
+01.10.2024,Purchase,MIGROS,5555,CHF,100.00,Debit,Posted,Groceries,
+02.10.2024,Refund,MIGROS,5555,CHF,-50.00,Credit,Posted,Groceries,`;
+
+    const transactions = parseSwisscard(csv);
+
+    assert.strictEqual(transactions[0].originalAmount, 100);
+    assert.strictEqual(transactions[1].originalAmount, -50);
+  });
+
+  it('debit 100 plus credit 50 totals 50 for the month', async () => {
+    const dbPath = './test-swisscard-credit-total.sqlite';
+    const db = new DB(dbPath);
+    try {
+      const csv = `Transaction date,Description,Merchant,Card number,Currency,Amount,Debit/Credit,Status,Merchant Category,Registered Category
+01.12.2024,Purchase,COOP,5555,CHF,100.00,Debit,Posted,Groceries,
+02.12.2024,Refund,COOP,5555,CHF,-50.00,Credit,Posted,Groceries,`;
+
+      await importTransactions(db, parseSwisscard(csv));
+      assert.strictEqual(db.getMonthTotal('2024-12'), 50);
+    } finally {
+      db.close();
+      unlinkSync(dbPath);
+    }
   });
 
   it('should filter out pending transactions', () => {

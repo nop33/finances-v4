@@ -23,9 +23,11 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
 
     const date = parseDate(transactionDate, 'DD.MM.YYYY');
     
-    // Spending is positive, credits are negative
+    // Spending is positive, credits/refunds are negative.
+    // Debit/Credit is the source of truth: some exports already sign Amount.
     const isCredit = debitCredit === 'Credit';
-    const originalAmount = isCredit ? -normalizeAmount(amount) : normalizeAmount(amount);
+    const magnitude = Math.abs(normalizeAmount(amount));
+    const originalAmount = isCredit ? -magnitude : magnitude;
 
     // Detect transaction kind
     let kind: ParsedTransaction['kind'] = 'expense';
