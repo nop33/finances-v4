@@ -419,3 +419,34 @@ test('migration collapses a pre-fix Swisscard credit stored with the old sign', 
     unlinkSync(dbPath);
   }
 });
+
+test('import records file coverage and distinct bank dates', async () => {
+  const dbPath = './test-import-coverage.sqlite';
+  const db = new DB(dbPath);
+  try {
+    await importTransactions(
+      db,
+      [
+        parsed({ date: '2024-09-30', merchant: 'Spill', originalAmount: 4, fileRowIndex: 0 }),
+        parsed({ date: '2024-10-01', merchant: 'COOP', originalAmount: 12, fileRowIndex: 1 }),
+        parsed({ date: '2024-10-02', merchant: 'MIGROS', originalAmount: 8, fileRowIndex: 2 }),
+        parsed({ date: '2024-10-03', merchant: 'SBB', originalAmount: 5, fileRowIndex: 3 }),
+        parsed({ date: '2024-10-04', merchant: 'Cafe', originalAmount: 6, fileRowIndex: 4 }),
+        parsed({ date: '2024-10-05', merchant: 'Shop', originalAmount: 7, fileRowIndex: 5 }),
+      ],
+      { file: 'october-neon.csv' }
+    );
+    assert.strictEqual(db.monthCoveredByImport('2024-10'), true);
+    assert.strictEqual(db.monthCoveredByImport('2024-09'), false);
+
+    await importTransactions(
+      db,
+      [parsed({ date: '2024-08-15', merchant: 'One day', originalAmount: 2, fileRowIndex: 0 })],
+      { file: 'august-neon.csv', statementMonth: '2024-08' }
+    );
+    assert.strictEqual(db.monthCoveredByImport('2024-08'), true);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});

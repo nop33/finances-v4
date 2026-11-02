@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { spawnSync } from 'node:child_process';
 import { DB } from './db.js';
-import { Transaction } from './types.js';
+import { ParsedTransaction, Transaction } from './types.js';
 import { loadCategories } from './categories.js';
 import {
   buildLedger,
@@ -15,6 +15,8 @@ import {
   merchantsMatch,
 } from './output.js';
 import { splitTransaction } from './split.js';
+import { categorizeMonth, correctTransaction } from './categorize.js';
+import { importTransactions } from './import.js';
 
 const categoryConfig = './dist/test-fixtures/test-output-categories.json';
 
@@ -210,6 +212,12 @@ test('summary reports total, top categories, flagged count, and month-over-month
       category: 'Meals/Snacks',
       confidence: 1,
     });
+    db.recordFileImport({
+      file: 'september-neon.csv',
+      source: 'neon',
+      statementMonth: '2024-09',
+      dates: ['2024-09-10'],
+    });
 
     const summary = buildSummary(db, '2024-10');
     assert.strictEqual(summary.total, 73);
@@ -308,6 +316,97 @@ test('summary flagged skips excluded and covered rows and does not treat missing
   }
 });
 
+test('summary does not flag a reviewed new merchant after correct', () => {
+  const dbPath = './test-output-flagged-reviewed.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'shop-1',
+      date: '2024-10-10',
+      merchant: 'Shop',
+      chfAmount: 20,
+    });
+    categorizeMonth(db, '2024-10');
+    const before = db.getTransaction('shop-1');
+    assert.strictEqual(before?.newMerchant, true);
+    assert.strictEqual(before?.reviewed, false);
+    const flagged = buildSummary(db, '2024-10');
+    assert.strictEqual(flagged.flagged, 1);
+    assert.strictEqual(flagged.flaggedBreakdown.newMerchant, 1);
+    assert.match(formatSummary(flagged), /new merchant: 1/);
+
+    correctTransaction(db, 'shop-1', 'Meals/Snacks');
+    const after = db.getTransaction('shop-1');
+    assert.strictEqual(after?.reviewed, true);
+    assert.strictEqual(after?.newMerchant, true);
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.flagged, 0);
+    assert.strictEqual(summary.flaggedBreakdown.newMerchant, 0);
+    assert.strictEqual(summary.flaggedBreakdown.lowConfidence, 0);
+    assert.match(formatSummary(summary), /new merchant: 0/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('summary skips reviewed rows for confidence flags and for fixed flags once reviewed', () => {
+  const dbPath = './test-output-flagged-reviewed-bits.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'reviewed-low',
+      date: '2024-10-06',
+      merchant: 'Cafe',
+      chfAmount: 8,
+      confidence: 0.2,
+      reviewed: true,
+    });
+    insertTx(db, {
+      id: 'reviewed-changed',
+      date: '2024-10-07',
+      merchant: 'Gym',
+      chfAmount: 40,
+      source: 'fixed',
+      fixedChanged: true,
+      reviewed: true,
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'open-changed',
+      date: '2024-10-08',
+      merchant: 'Internet',
+      chfAmount: 60,
+      source: 'fixed',
+      fixedChanged: true,
+      reviewed: false,
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'open-missing',
+      date: '2024-10-09',
+      merchant: 'Insurance',
+      chfAmount: 20,
+      source: 'fixed',
+      fixedMissing: true,
+      reviewed: false,
+      confidence: 1,
+    });
+
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.flagged, 2);
+    assert.deepStrictEqual(summary.flaggedBreakdown, {
+      fixedChanged: 1,
+      fixedMissing: 1,
+      lowConfidence: 0,
+      newMerchant: 0,
+    });
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
 test('summary omits month-over-month delta when the previous month is empty', () => {
   withMonth('./test-output-summary-nodelta.sqlite', db => {
     const summary = buildSummary(db, '2024-10');
@@ -334,6 +433,123 @@ test('summary treats a stray non-bank previous-month row as not loaded', () => {
     assert.strictEqual(summary.delta, undefined);
     assert.match(formatSummary(summary), /previous month not loaded/);
   });
+});
+
+function parsedBank(date: string, merchant: string, amount: number, fileRowIndex: number): ParsedTransaction {
+  return {
+    date,
+    merchant,
+    originalAmount: amount,
+    originalCurrency: 'CHF',
+    source: 'neon',
+    fileRowIndex,
+  };
+}
+
+test('summary ignores statement spill-over dates when deciding previous month loaded', async () => {
+  const dbPath = './test-output-summary-spillover.sqlite';
+  const db = new DB(dbPath);
+  try {
+    const rows: ParsedTransaction[] = [
+      parsedBank('2024-09-30', 'Spill A', 10, 0),
+      parsedBank('2024-09-30', 'Spill B', 11, 1),
+      parsedBank('2024-09-30', 'Spill C', 12, 2),
+    ];
+    for (let day = 1; day <= 6; day++) {
+      rows.push(parsedBank(`2024-10-0${day}`, `Oct ${day}`, 5, 2 + day));
+    }
+    await importTransactions(db, rows, { file: 'october-neon.csv' });
+
+    assert.strictEqual(db.monthCoveredByImport('2024-10'), true);
+    assert.strictEqual(db.monthCoveredByImport('2024-09'), false);
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.delta, undefined);
+    assert.match(formatSummary(summary), /previous month not loaded/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('summary treats five distinct bank dates in an import as covering the month', async () => {
+  const dbPath = './test-output-summary-five-dates.sqlite';
+  const db = new DB(dbPath);
+  try {
+    const rows = [1, 2, 3, 4, 5].map(day =>
+      parsedBank(`2024-09-0${day}`, `Sep ${day}`, 10, day)
+    );
+    await importTransactions(db, rows, { file: 'september-neon.csv' });
+    assert.strictEqual(db.monthCoveredByImport('2024-09'), true);
+
+    insertTx(db, {
+      id: 'oct-1',
+      date: '2024-10-10',
+      merchant: 'October',
+      chfAmount: 7,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.previousMonth, '2024-09');
+    assert.ok(summary.delta !== undefined);
+    assert.doesNotMatch(formatSummary(summary), /previous month not loaded/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('summary does not treat four distinct dates as covering the month', async () => {
+  const dbPath = './test-output-summary-four-dates.sqlite';
+  const db = new DB(dbPath);
+  try {
+    const rows = [1, 2, 3, 4].map(day =>
+      parsedBank(`2024-09-0${day}`, `Sep ${day}`, 10, day)
+    );
+    await importTransactions(db, rows, { file: 'september-partial.csv' });
+    assert.strictEqual(db.monthCoveredByImport('2024-09'), false);
+    insertTx(db, {
+      id: 'oct-1',
+      date: '2024-10-10',
+      merchant: 'October',
+      chfAmount: 7,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    const summary = buildSummary(db, '2024-10');
+    assert.strictEqual(summary.delta, undefined);
+    assert.match(formatSummary(summary), /previous month not loaded/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('summary treats an import --month as covering that month even with one date', async () => {
+  const dbPath = './test-output-summary-statement-month.sqlite';
+  const db = new DB(dbPath);
+  try {
+    await importTransactions(
+      db,
+      [parsedBank('2024-09-30', 'Late', 3, 0)],
+      { file: 'september-neon.csv', statementMonth: '2024-09' }
+    );
+    assert.strictEqual(db.monthCoveredByImport('2024-09'), true);
+    insertTx(db, {
+      id: 'oct-1',
+      date: '2024-10-10',
+      merchant: 'October',
+      chfAmount: 7,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    const summary = buildSummary(db, '2024-10');
+    assert.ok(summary.delta !== undefined);
+    assert.doesNotMatch(formatSummary(summary), /previous month not loaded/);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
 });
 
 test('Splitwise adjustment matches token overlap within 31 days and does not change totals', () => {

@@ -1,4 +1,4 @@
-import { DB } from './db.js';
+import { BANK_SOURCES, DB } from './db.js';
 import { FxConverter } from './fx.js';
 import { Transaction, ParsedTransaction } from './types.js';
 import { importTransactionId, repairMojibake } from './parsers/utils.js';
@@ -6,13 +6,19 @@ import { loadExcludeRules, shouldExclude } from './exclude.js';
 
 export type ImportStats = { new: number; unchanged: number };
 
+export type ImportOptions = {
+  file?: string;
+  statementMonth?: string;
+};
+
 export function formatImportStats(stats: ImportStats): string {
   return `${stats.new} new, ${stats.unchanged} unchanged`;
 }
 
 export async function importTransactions(
   db: DB,
-  parsedTransactions: ParsedTransaction[]
+  parsedTransactions: ParsedTransaction[],
+  options: ImportOptions = {}
 ): Promise<ImportStats> {
   const fx = new FxConverter(db);
   const transactions: Transaction[] = [];
@@ -80,5 +86,16 @@ export async function importTransactions(
     else stats.new++;
   }
   db.insertTransactions(transactions);
+
+  const bankTxs = transactions.filter(tx => BANK_SOURCES.has(tx.source));
+  if (bankTxs.length > 0 || options.statementMonth) {
+    db.recordFileImport({
+      file: options.file || '(unknown)',
+      source: bankTxs[0]?.source || transactions[0]?.source,
+      statementMonth: options.statementMonth,
+      dates: bankTxs.map(tx => tx.date),
+      importedAt,
+    });
+  }
   return stats;
 }
