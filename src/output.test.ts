@@ -12,6 +12,7 @@ import {
   buildSummary,
   formatSummary,
   formatDecimal,
+  merchantsMatch,
 } from './output.js';
 import { splitTransaction } from './split.js';
 
@@ -237,6 +238,137 @@ test('summary omits month-over-month delta when the previous month is empty', ()
     assert.strictEqual(summary.delta, undefined);
     assert.doesNotMatch(formatSummary(summary), /vs /);
   });
+});
+
+test('Splitwise adjustment matches token overlap within 31 days and does not change totals', () => {
+  const dbPath = './test-output-sw-window.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'fest-bank',
+      date: '2024-10-01',
+      merchant: 'Festival',
+      chfAmount: 100,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'fest-sw',
+      date: '2024-10-05',
+      source: 'splitwise',
+      merchant: 'Festival tickets',
+      chfAmount: -50,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'too-big-sw',
+      date: '2024-10-06',
+      source: 'splitwise',
+      merchant: 'Festival merch',
+      chfAmount: -120,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    const totalBefore = db.getMonthTotal('2024-10');
+    const rows = buildLedger(db, '2024-10');
+    const bank = rows.find(r => r.id === 'fest-bank');
+    assert.strictEqual(bank?.splitwiseAdjustment, -50);
+    assert.ok(!rows.some(r => r.splitwiseAdjustment === -120), 'share larger than the charge must not link');
+    assert.strictEqual(db.getMonthTotal('2024-10'), totalBefore);
+    const amountSum = rows.reduce((sum, r) => sum + Math.round(r.amount * 100), 0);
+    assert.strictEqual(amountSum, Math.round(totalBefore * 100));
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('Splitwise links each share at most once and prefers the closer date', () => {
+  const dbPath = './test-output-sw-once.sqlite';
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'cafe-1',
+      date: '2024-10-01',
+      merchant: 'Café Central',
+      chfAmount: 40,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'cafe-2',
+      date: '2024-10-20',
+      merchant: 'Cafe Central',
+      chfAmount: 40,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'cafe-sw',
+      date: '2024-10-03',
+      source: 'splitwise',
+      merchant: 'Cafe dinner',
+      chfAmount: -15,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    const rows = buildLedger(db, '2024-10');
+    const first = rows.find(r => r.id === 'cafe-1');
+    const second = rows.find(r => r.id === 'cafe-2');
+    assert.strictEqual(first?.splitwiseAdjustment, -15);
+    assert.strictEqual(second?.splitwiseAdjustment, null);
+    assert.ok(merchantsMatch('Café Central', 'Cafe dinner'));
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('ledger and expences-row round with largest remainder so displayed amounts sum to the month total', () => {
+  const dbPath = './test-output-round.sqlite';
+  const prev = process.env.CATEGORY_CONFIG;
+  process.env.CATEGORY_CONFIG = categoryConfig;
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, {
+      id: 'half-a',
+      date: '2024-10-01',
+      merchant: 'A',
+      chfAmount: 0.005,
+      category: 'Meals/Snacks',
+      confidence: 1,
+    });
+    insertTx(db, {
+      id: 'half-b',
+      date: '2024-10-02',
+      merchant: 'B',
+      chfAmount: 0.005,
+      category: 'Shopping/Purchases',
+      confidence: 1,
+    });
+    assert.strictEqual(db.getMonthTotal('2024-10'), 0.01);
+
+    const rows = buildLedger(db, '2024-10');
+    const ledgerSum = rows.reduce((sum, r) => sum + Math.round(r.amount * 100), 0);
+    assert.strictEqual(ledgerSum, 1);
+    assert.ok(rows.every(r => Number.isInteger(Math.round(r.amount * 100))));
+    const csv = ledgerCsv(rows);
+    const csvAmounts = [...csv.matchAll(/,(\d+\.\d{2}),/g)].map(m => m[1]);
+    const csvSum = csvAmounts.reduce((sum, n) => sum + Math.round(Number(n) * 100), 0);
+    assert.strictEqual(csvSum, 1);
+
+    const expences = buildExpencesRow(db, '2024-10', loadCategories(categoryConfig));
+    const cellsSum = Math.round(Object.values(expences.cells).reduce((s, n) => s + n, 0) * 100);
+    assert.strictEqual(expences.total, 0.01);
+    assert.strictEqual(cellsSum, 1);
+    assert.strictEqual(Math.round(expences.cellsSum * 100), 1);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+    if (prev === undefined) delete process.env.CATEGORY_CONFIG;
+    else process.env.CATEGORY_CONFIG = prev;
+  }
 });
 
 test('ledger and expences-row CLI write --out files', () => {
