@@ -1,6 +1,6 @@
 import { DB } from './db.js';
 import { Transaction } from './types.js';
-import { loadFixedBills, isBillActive, isBillDue, getExpectedChargeAmount, matchesBillPattern, FixedBill } from './fixed-bills.js';
+import { loadFixedBills, isBillActive, isBillDue, getExpectedChargeAmount, matchesBillPattern, amountsMatchBill } from './fixed-bills.js';
 
 export function applyFixedBills(db: DB, yearMonth: string): void {
   const bills = loadFixedBills();
@@ -28,13 +28,14 @@ export function applyFixedBills(db: DB, yearMonth: string): void {
       reviewed: existingTx?.reviewed || false
     };
 
-    const bankTransactions = allTransactions.filter(tx => 
-      tx.source !== 'fixed' && matchesBillPattern(tx.merchant, bill)
-    );
-
     if (bill.merchantPatterns && bill.merchantPatterns.length > 0) {
       const isDue = isBillDue(bill, yearMonth);
       const expectedAmount = getExpectedChargeAmount(bill);
+      const bankTransactions = allTransactions.filter(tx =>
+        tx.source !== 'fixed' &&
+        matchesBillPattern(tx.merchant, bill) &&
+        amountsMatchBill(tx.chfAmount, expectedAmount)
+      );
 
       if (isDue && bankTransactions.length === 0) {
         syntheticTx.fixedMissing = true;

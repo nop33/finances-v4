@@ -7,6 +7,7 @@ import {
   isBillDue,
   getExpectedChargeAmount,
   matchesBillPattern,
+  amountsMatchBill,
   FixedBill
 } from './fixed-bills.js';
 
@@ -201,4 +202,13 @@ test('matchesBillPattern matches regex patterns', () => {
   assert.strictEqual(matchesBillPattern('Insurance Co', bill), true);
   assert.strictEqual(matchesBillPattern('Insurance Inc', bill), false);
   assert.strictEqual(matchesBillPattern('Best Insurance Co', bill), false);
+});
+
+test('amountsMatchBill allows a 10% band around the expected amount', () => {
+  assert.strictEqual(amountsMatchBill(4, 4), true);
+  assert.strictEqual(amountsMatchBill(4.40, 4), true);
+  assert.strictEqual(amountsMatchBill(3.60, 4), true);
+  assert.strictEqual(amountsMatchBill(26.95, 4), false);
+  assert.strictEqual(amountsMatchBill(1090, 1000), true);
+  assert.strictEqual(amountsMatchBill(1110, 1000), false);
 });
