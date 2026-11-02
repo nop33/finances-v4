@@ -106,7 +106,7 @@ node dist/cli.js summary --month 2024-10
 - **correct <txId> <category>**: Manually correct a transaction's category, teaching merchant memory for future similar transactions
 - **ledger --month YYYY-MM --out file.csv**: Counted (non-excluded, not covered-by-bill) transactions as CSV. Splits become one row per part. Columns: date, source, merchant, amount, category, splitwise_adjustment, reviewed. Sorted by date then id. A bank charge whose merchant tokens overlap a Splitwise row within ±31 days, with `|share| <= charge`, gets that share in `splitwise_adjustment` (each Splitwise row links at most once). Linking is display-only and does not change totals. Displayed amounts use largest-remainder rounding so they sum to the month total.
 - **expences-row --month YYYY-MM --out file.json**: One monthly Expences row from `CATEGORY_CONFIG` leaf columns (letters C–CL). JSON `{month, cells, unmapped, total, cellsSum}`. Every mapped column is present (0 if no spend). Categories with spend but no column are listed in `unmapped`. Cell and unmapped amounts use largest-remainder rounding so they sum to the month total. Formula columns are not written.
-- **summary --month YYYY-MM**: Total, top 5 categories, flagged row count (`fixedChanged`, `fixedMissing`, confidence below 0.7), and month-over-month delta when the previous month exists in the DB.
+- **summary --month YYYY-MM**: Total, top 5 categories, flagged row count (`fixedChanged`, `fixedMissing`, confidence below 0.7, new merchant) with a per-flag breakdown. Excluded rows and covered bank charges are skipped; missing confidence is not treated as low. Month-over-month delta when the previous month exists in the DB.
 
 ## Schema
 

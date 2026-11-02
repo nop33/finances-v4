@@ -24,11 +24,19 @@ export interface ExpencesRow {
   cellsSum: number;
 }
 
+export interface FlaggedBreakdown {
+  fixedChanged: number;
+  fixedMissing: number;
+  lowConfidence: number;
+  newMerchant: number;
+}
+
 export interface MonthSummary {
   month: string;
   total: number;
   topCategories: Array<{ category: string; amount: number }>;
   flagged: number;
+  flaggedBreakdown: FlaggedBreakdown;
   previousMonth?: string;
   delta?: number;
 }
@@ -268,8 +276,17 @@ export function writeExpencesRow(db: DB, yearMonth: string, outPath: string): Ex
   return row;
 }
 
+function isReviewable(tx: Transaction): boolean {
+  return !tx.excluded && !tx.coveredByFixedBill;
+}
+
+function isLowConfidence(tx: Transaction): boolean {
+  return tx.confidence != null && tx.confidence < 0.7;
+}
+
 function isFlagged(tx: Transaction): boolean {
-  return !!tx.fixedChanged || !!tx.fixedMissing || (tx.confidence ?? 0) < 0.7;
+  if (!isReviewable(tx)) return false;
+  return !!tx.fixedChanged || !!tx.fixedMissing || isLowConfidence(tx) || !!tx.newMerchant;
 }
 
 export function buildSummary(db: DB, yearMonth: string): MonthSummary {
@@ -279,12 +296,20 @@ export function buildSummary(db: DB, yearMonth: string): MonthSummary {
     .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category))
     .slice(0, 5);
 
-  const flagged = db.getTransactionsByMonth(yearMonth).filter(isFlagged).length;
+  const reviewable = db.getTransactionsByMonth(yearMonth).filter(isReviewable);
+  const flaggedRows = reviewable.filter(isFlagged);
+  const flaggedBreakdown: FlaggedBreakdown = {
+    fixedChanged: reviewable.filter(tx => !!tx.fixedChanged).length,
+    fixedMissing: reviewable.filter(tx => !!tx.fixedMissing).length,
+    lowConfidence: reviewable.filter(isLowConfidence).length,
+    newMerchant: reviewable.filter(tx => !!tx.newMerchant).length,
+  };
   const summary: MonthSummary = {
     month: yearMonth,
     total: money(db.getMonthTotal(yearMonth)),
     topCategories,
-    flagged,
+    flagged: flaggedRows.length,
+    flaggedBreakdown,
   };
 
   const prev = previousMonth(yearMonth);
@@ -310,6 +335,10 @@ export function formatSummary(summary: MonthSummary): string {
     }
   }
   lines.push(`Flagged: ${summary.flagged}`);
+  lines.push(`  fixedChanged: ${summary.flaggedBreakdown.fixedChanged}`);
+  lines.push(`  fixedMissing: ${summary.flaggedBreakdown.fixedMissing}`);
+  lines.push(`  low confidence: ${summary.flaggedBreakdown.lowConfidence}`);
+  lines.push(`  new merchant: ${summary.flaggedBreakdown.newMerchant}`);
   if (summary.previousMonth !== undefined && summary.delta !== undefined) {
     const signed = summary.delta > 0 ? `+${formatDecimal(summary.delta)}` : formatDecimal(summary.delta);
     lines.push(`vs ${summary.previousMonth}: ${signed}`);
