@@ -1,6 +1,6 @@
 import Papa from 'papaparse';
 import { ParsedTransaction } from '../types.js';
-import { parseDate, normalizeAmount, repairMojibake } from './utils.js';
+import { parseDate, swisscardSignedAmount, repairMojibake } from './utils.js';
 
 export function parseSwisscard(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, { header: true, skipEmptyLines: true });
@@ -26,8 +26,7 @@ export function parseSwisscard(content: string): ParsedTransaction[] {
     // Spending is positive, credits/refunds are negative.
     // Debit/Credit is the source of truth: some exports already sign Amount.
     const isCredit = debitCredit === 'Credit';
-    const magnitude = Math.abs(normalizeAmount(amount));
-    const originalAmount = isCredit ? -magnitude : magnitude;
+    const originalAmount = swisscardSignedAmount(amount, isCredit);
 
     // Detect transaction kind
     let kind: ParsedTransaction['kind'] = 'expense';

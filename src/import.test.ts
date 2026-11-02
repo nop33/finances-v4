@@ -1,9 +1,11 @@
 import { describe, it, before, after, test } from 'node:test';
 import assert from 'node:assert';
+import Database from 'better-sqlite3';
 import { DB } from './db.js';
 import { importTransactions } from './import.js';
 import { ParsedTransaction, Transaction } from './types.js';
 import { parseRevolutCsv } from './parsers/revolut.js';
+import { importTransactionId } from './parsers/utils.js';
 import { unlinkSync } from 'fs';
 
 function parsed(partial: Partial<ParsedTransaction> & { date: string; merchant: string; originalAmount: number }): ParsedTransaction {
@@ -282,6 +284,134 @@ test('re-import after mojibake repair does not duplicate a pre-fix row', async (
     assert.strictEqual(txs.length, 1);
     assert.strictEqual(txs[0].merchant, 'Ταβέρνα');
     assert.notStrictEqual(txs[0].id, 'old-garbled-id');
+  } finally {
+    migrated.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('migration keeps splits when a transaction id is rewritten', () => {
+  const dbPath = './test-import-migrate-splits.sqlite';
+  const db = new DB(dbPath);
+  try {
+    db.insertTransaction({
+      id: 'old-split-id',
+      date: '2024-12-08',
+      source: 'swisscard',
+      merchant: 'Department Store',
+      originalAmount: 51,
+      originalCurrency: 'CHF',
+      chfAmount: 51,
+      fileRowIndex: 3,
+      importedAt: '2024-12-08T10:00:00.000Z',
+    } as Transaction);
+    db.setSplits('old-split-id', [
+      { category: 'Shopping', chfAmount: 25.50 },
+      { category: 'General gifts', chfAmount: 25.50 }
+    ]);
+  } finally {
+    db.close();
+  }
+
+  const migrated = new DB(dbPath);
+  try {
+    const txs = migrated.getTransactionsByMonth('2024-12');
+    assert.strictEqual(txs.length, 1);
+    assert.notStrictEqual(txs[0].id, 'old-split-id');
+    assert.strictEqual(txs[0].splits?.length, 2);
+    assert.strictEqual(txs[0].splits?.[0].category, 'Shopping');
+    assert.strictEqual(txs[0].splits?.[0].chfAmount, 25.50);
+    assert.strictEqual(txs[0].splits?.[1].category, 'General gifts');
+    assert.strictEqual(txs[0].splits?.[1].chfAmount, 25.50);
+  } finally {
+    migrated.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('a failed import-id migration leaves the database unchanged', () => {
+  const dbPath = './test-import-migrate-rollback.sqlite';
+  const garbled = Buffer.from('Ταβέρνα', 'utf8').toString('latin1');
+  const db = new DB(dbPath);
+  try {
+    db.insertTransaction({
+      id: 'old-garbled-id',
+      date: '2024-12-08',
+      source: 'swisscard',
+      merchant: garbled,
+      originalAmount: 18.5,
+      originalCurrency: 'CHF',
+      chfAmount: 18.5,
+      fileRowIndex: 7,
+      importedAt: '2024-12-08T10:00:00.000Z',
+    } as Transaction);
+  } finally {
+    db.close();
+  }
+
+  const sqlite = new Database(dbPath);
+  sqlite.exec(`
+    CREATE TRIGGER abort_id_change
+    BEFORE UPDATE OF id ON transactions
+    BEGIN
+      SELECT RAISE(ABORT, 'test rollback');
+    END;
+  `);
+  sqlite.close();
+
+  assert.throws(() => new DB(dbPath), /test rollback/);
+
+  const inspect = new Database(dbPath);
+  try {
+    const row = inspect.prepare('SELECT id, merchant FROM transactions').get() as { id: string; merchant: string };
+    assert.strictEqual(row.id, 'old-garbled-id');
+    assert.strictEqual(row.merchant, garbled);
+  } finally {
+    inspect.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('migration collapses a pre-fix Swisscard credit stored with the old sign', () => {
+  const dbPath = './test-import-swisscard-sign-migrate.sqlite';
+  const correctedId = importTransactionId('swisscard', '2024-12-02', -15, 'MIGROS', 1);
+  const db = new DB(dbPath);
+  try {
+    db.insertTransaction({
+      id: 'old-positive-credit',
+      date: '2024-12-02',
+      source: 'swisscard',
+      merchant: 'MIGROS',
+      description: 'Refund',
+      originalAmount: 15,
+      originalCurrency: 'CHF',
+      chfAmount: 15,
+      fileRowIndex: 1,
+      importedAt: '2024-12-02T10:00:00.000Z',
+    } as Transaction);
+    db.insertTransaction({
+      id: correctedId,
+      date: '2024-12-02',
+      source: 'swisscard',
+      merchant: 'MIGROS',
+      description: 'Refund',
+      originalAmount: -15,
+      originalCurrency: 'CHF',
+      chfAmount: -15,
+      fileRowIndex: 1,
+      importedAt: '2024-12-03T10:00:00.000Z',
+    } as Transaction);
+  } finally {
+    db.close();
+  }
+
+  const migrated = new DB(dbPath);
+  try {
+    const txs = migrated.getTransactionsByMonth('2024-12').filter(t => t.merchant === 'MIGROS');
+    assert.strictEqual(txs.length, 1);
+    assert.strictEqual(txs[0].originalAmount, -15);
+    assert.strictEqual(txs[0].chfAmount, -15);
+    assert.strictEqual(txs[0].id, correctedId);
   } finally {
     migrated.close();
     unlinkSync(dbPath);

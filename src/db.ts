@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { Transaction, FxRate, TransactionSplit } from './types.js';
-import { importTransactionId, repairMojibake } from './parsers/utils.js';
+import { importTransactionId, repairMojibake, swisscardSignedAmount } from './parsers/utils.js';
 
 export class DB {
   private db: Database.Database;
@@ -8,7 +8,13 @@ export class DB {
   constructor(path: string = './data/finances.sqlite') {
     this.db = new Database(path);
     this.db.pragma('journal_mode = WAL');
-    this.initSchema();
+    this.db.pragma('foreign_keys = ON');
+    try {
+      this.initSchema();
+    } catch (err) {
+      this.db.close();
+      throw err;
+    }
   }
 
   private initSchema() {
@@ -102,59 +108,82 @@ export class DB {
       merchant: string;
       description: string | null;
       originalAmount: number;
+      chfAmount: number;
+      kind: string | null;
       fileRowIndex: number;
       importedAt: string;
       reviewed: number;
       category: string | null;
     };
 
-    const rows = this.db.prepare(`
-      SELECT
-        id, date, source, merchant, description,
-        original_amount as originalAmount,
-        file_row_index as fileRowIndex,
-        imported_at as importedAt,
-        reviewed, category
-      FROM transactions
-      WHERE source NOT IN ('fixed', 'splitwise', 'sbb', 'twint')
-        AND id NOT LIKE 'fixed:%'
-        AND id NOT LIKE 'sw-%'
-        AND id NOT LIKE 'twi-%'
-    `).all() as Row[];
-
-    if (rows.length === 0) return;
-
-    const repairMerchant = this.db.prepare('UPDATE transactions SET merchant = ? WHERE id = ?');
-    for (const row of rows) {
-      const repaired = repairMojibake(row.merchant);
-      if (repaired !== row.merchant) {
-        repairMerchant.run(repaired, row.id);
-        row.merchant = repaired;
-      }
-    }
-
-    const deleteTx = this.db.prepare('DELETE FROM transactions WHERE id = ?');
-    const deleteSplits = this.db.prepare('DELETE FROM transaction_splits WHERE transaction_id = ?');
-    const moveSplits = this.db.prepare(
-      'UPDATE transaction_splits SET transaction_id = ? WHERE transaction_id = ?'
-    );
-    const rename = this.db.prepare('UPDATE transactions SET id = ? WHERE id = ?');
-
-    const score = (row: Row) => (row.reviewed ? 100 : 0) + (row.category ? 10 : 0);
-
-    const collapseInto = (survivor: Row, extra: Row) => {
-      const survivorHasSplits = this.db.prepare(
-        'SELECT 1 FROM transaction_splits WHERE transaction_id = ?'
-      ).get(survivor.id);
-      if (!survivorHasSplits) {
-        moveSplits.run(survivor.id, extra.id);
-      } else {
-        deleteSplits.run(extra.id);
-      }
-      deleteTx.run(extra.id);
+    const storedSwisscardIsCredit = (row: Row) => {
+      if (row.originalAmount < 0 || row.kind === 'card-payment') return true;
+      const text = `${row.description || ''} ${row.merchant}`.toLowerCase();
+      return text.includes('refund') || text.includes('cashback');
     };
 
     const apply = this.db.transaction(() => {
+      this.db.pragma('defer_foreign_keys = ON');
+
+      const rows = this.db.prepare(`
+        SELECT
+          id, date, source, merchant, description, kind,
+          original_amount as originalAmount,
+          chf_amount as chfAmount,
+          file_row_index as fileRowIndex,
+          imported_at as importedAt,
+          reviewed, category
+        FROM transactions
+        WHERE source NOT IN ('fixed', 'splitwise', 'sbb', 'twint')
+          AND id NOT LIKE 'fixed:%'
+          AND id NOT LIKE 'sw-%'
+          AND id NOT LIKE 'twi-%'
+      `).all() as Row[];
+
+      if (rows.length === 0) return;
+
+      const repairMerchant = this.db.prepare('UPDATE transactions SET merchant = ? WHERE id = ?');
+      const repairSwisscardSign = this.db.prepare(
+        'UPDATE transactions SET original_amount = ?, chf_amount = ? WHERE id = ?'
+      );
+      for (const row of rows) {
+        const repaired = repairMojibake(row.merchant);
+        if (repaired !== row.merchant) {
+          repairMerchant.run(repaired, row.id);
+          row.merchant = repaired;
+        }
+        if (row.source === 'swisscard') {
+          const signed = swisscardSignedAmount(row.originalAmount, storedSwisscardIsCredit(row));
+          if (signed !== row.originalAmount) {
+            const signedChf = row.chfAmount === 0 ? 0 : Math.abs(row.chfAmount) * Math.sign(signed);
+            repairSwisscardSign.run(signed, signedChf, row.id);
+            row.originalAmount = signed;
+            row.chfAmount = signedChf;
+          }
+        }
+      }
+
+      const deleteTx = this.db.prepare('DELETE FROM transactions WHERE id = ?');
+      const deleteSplits = this.db.prepare('DELETE FROM transaction_splits WHERE transaction_id = ?');
+      const moveSplits = this.db.prepare(
+        'UPDATE transaction_splits SET transaction_id = ? WHERE transaction_id = ?'
+      );
+      const rename = this.db.prepare('UPDATE transactions SET id = ? WHERE id = ?');
+
+      const score = (row: Row) => (row.reviewed ? 100 : 0) + (row.category ? 10 : 0);
+
+      const collapseInto = (survivor: Row, extra: Row) => {
+        const survivorHasSplits = this.db.prepare(
+          'SELECT 1 FROM transaction_splits WHERE transaction_id = ?'
+        ).get(survivor.id);
+        if (!survivorHasSplits) {
+          moveSplits.run(survivor.id, extra.id);
+        } else {
+          deleteSplits.run(extra.id);
+        }
+        deleteTx.run(extra.id);
+      };
+
       const byRow = new Map<string, Row[]>();
       for (const row of rows) {
         const key = `${row.source}|${row.date}|${row.originalAmount}|${row.merchant}|${row.fileRowIndex}`;
@@ -358,8 +387,8 @@ export class DB {
   }
 
   deleteTransaction(id: string): void {
-    const stmt = this.db.prepare('DELETE FROM transactions WHERE id = ?');
-    stmt.run(id);
+    this.db.prepare('DELETE FROM transaction_splits WHERE transaction_id = ?').run(id);
+    this.db.prepare('DELETE FROM transactions WHERE id = ?').run(id);
   }
 
   updateTransactionCategorization(
