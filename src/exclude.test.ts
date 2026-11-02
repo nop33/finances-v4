@@ -92,6 +92,37 @@ test('exclude-apply marks matching imported rows as excluded', () => {
   }
 });
 
+test('exclude-apply does not undo a manual include', () => {
+  const path = './test-exclude-rules-manual-include.json';
+  const dbPath = './test-exclude-manual-include.sqlite';
+  writeFileSync(path, JSON.stringify([{ pattern: 'broker-xyz' }]));
+  const prev = process.env.EXCLUDE_RULES_CONFIG;
+  process.env.EXCLUDE_RULES_CONFIG = path;
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, { id: 'tx1', chfAmount: 80, merchant: 'Broker-XYZ Transfer' });
+    insertTx(db, { id: 'tx2', chfAmount: 12, merchant: 'COOP', date: '2024-11-03', fileRowIndex: 1 });
+
+    applyExcludeRules(db, '2024-11');
+    assert.strictEqual(db.getTransaction('tx1')?.excluded, true);
+
+    setTransactionExcluded(db, 'tx1', false);
+    assert.strictEqual(db.getTransaction('tx1')?.excluded, false);
+    assert.strictEqual(db.getMonthTotal('2024-11'), 92);
+
+    const applied = applyExcludeRules(db, '2024-11');
+    assert.strictEqual(applied, 0);
+    assert.strictEqual(db.getTransaction('tx1')?.excluded, false);
+    assert.strictEqual(db.getMonthTotal('2024-11'), 92);
+  } finally {
+    if (prev === undefined) delete process.env.EXCLUDE_RULES_CONFIG;
+    else process.env.EXCLUDE_RULES_CONFIG = prev;
+    db.close();
+    unlinkSync(dbPath);
+    unlinkSync(path);
+  }
+});
+
 test('exclude and include toggle a single row', () => {
   const dbPath = './test-exclude-toggle.sqlite';
   const db = new DB(dbPath);
