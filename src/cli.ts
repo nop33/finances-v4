@@ -2,7 +2,7 @@
 
 import { DB } from './db.js';
 import { parseFile } from './parsers/index.js';
-import { importTransactions } from './import.js';
+import { importTransactions, formatImportStats } from './import.js';
 import { categorizeMonth, correctTransaction } from './categorize.js';
 import { applyFixedBills } from './fixed.js';
 import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
@@ -58,8 +58,8 @@ try {
       console.log(`Importing ${file}...`);
       const parsed = parseFile(file);
       console.log(`  Parsed ${parsed.length} transactions`);
-      await importTransactions(db, parsed);
-      console.log(`  Imported successfully`);
+      const stats = await importTransactions(db, parsed);
+      console.log(`  ${formatImportStats(stats)}`);
     }
   } else if (command === 'sbb' && args[1] === 'import') {
     const files = args.slice(2);
@@ -68,7 +68,7 @@ try {
       process.exit(1);
     }
 
-    let totalImported = 0;
+    const totals = { new: 0, unchanged: 0 };
     let skipped = 0;
 
     for (const file of files) {
@@ -76,9 +76,10 @@ try {
       try {
         const parsed = parseFile(file);
         console.log(`  Parsed ${parsed.length} transactions`);
-        await importTransactions(db, parsed);
-        console.log(`  Imported successfully`);
-        totalImported += parsed.length;
+        const stats = await importTransactions(db, parsed);
+        console.log(`  ${formatImportStats(stats)}`);
+        totals.new += stats.new;
+        totals.unchanged += stats.unchanged;
       } catch (error) {
         console.error(`  Error: ${error instanceof Error ? error.message : String(error)}`);
         console.error(`  Skipping ${file}`);
@@ -86,7 +87,7 @@ try {
       }
     }
 
-    console.log(`\nImport complete: ${totalImported} imported, ${skipped} skipped`);
+    console.log(`\nImport complete: ${formatImportStats(totals)}, ${skipped} skipped`);
   } else if (command === 'list') {
     const monthIndex = args.indexOf('--month');
     if (monthIndex === -1 || !args[monthIndex + 1]) {

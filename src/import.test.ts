@@ -71,11 +71,13 @@ describe('Import module', () => {
       },
     ];
 
-    await importTransactions(db, parsed);
+    const first = await importTransactions(db, parsed);
+    assert.deepStrictEqual(first, { new: 1, unchanged: 0 });
     const firstImport = db.getTransactionsByMonth('2024-10');
     const initialCount = firstImport.length;
 
-    await importTransactions(db, parsed);
+    const second = await importTransactions(db, parsed);
+    assert.deepStrictEqual(second, { new: 0, unchanged: 1 });
     const secondImport = db.getTransactionsByMonth('2024-10');
 
     assert.strictEqual(secondImport.length, initialCount);
