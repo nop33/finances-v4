@@ -9,6 +9,7 @@ import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js
 import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
 import { applyExcludeRules, setTransactionExcluded } from './exclude.js';
 import { startServer } from './web-server.js';
+import { writeLedger, writeExpencesRow, buildSummary, formatSummary } from './output.js';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 
@@ -31,8 +32,33 @@ function printUsage() {
   finances include <txId>                       Include a transaction in totals
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
   finances total --month YYYY-MM                Show month total (excludes covered charges)
+  finances ledger --month YYYY-MM --out file.csv
+                                                Write counted transactions as CSV
+  finances expences-row --month YYYY-MM --out file.json
+                                                Write one Expences sheet row as JSON
+  finances summary --month YYYY-MM              Print a month summary
   finances serve [--port 4321] [--host 127.0.0.1]  Start web review server
 `);
+}
+
+function requireMonth(argv: string[]): string {
+  const monthIndex = argv.indexOf('--month');
+  const month = monthIndex !== -1 ? argv[monthIndex + 1] : undefined;
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+    console.error('Error: --month YYYY-MM required');
+    process.exit(1);
+  }
+  return month;
+}
+
+function requireOut(argv: string[]): string {
+  const outIndex = argv.indexOf('--out');
+  const outPath = outIndex !== -1 ? argv[outIndex + 1] : undefined;
+  if (!outPath) {
+    console.error('Error: --out <file> required');
+    process.exit(1);
+  }
+  return outPath;
 }
 
 if (!command || command === '--help' || command === '-h') {
@@ -248,6 +274,27 @@ try {
         console.log(`  ${category}: CHF ${byCategory[category].toFixed(2)}`);
       }
     }
+  } else if (command === 'ledger') {
+    const month = requireMonth(args);
+    const outPath = requireOut(args);
+    mkdirSync(dirname(outPath) || '.', { recursive: true });
+    const rows = writeLedger(db, month, outPath);
+    console.log(`Wrote ${rows.length} ledger row(s) to ${outPath}`);
+  } else if (command === 'expences-row') {
+    const month = requireMonth(args);
+    const outPath = requireOut(args);
+    mkdirSync(dirname(outPath) || '.', { recursive: true });
+    const row = writeExpencesRow(db, month, outPath);
+    console.log(`Wrote Expences row for ${row.month} to ${outPath}`);
+    if (row.unmapped.length > 0) {
+      console.log(`Unmapped categories: ${row.unmapped.map(u => u.category).join(', ')}`);
+    }
+    if (row.cellsSum !== row.total) {
+      console.log(`cells sum ${row.cellsSum} != total ${row.total}`);
+    }
+  } else if (command === 'summary') {
+    const month = requireMonth(args);
+    process.stdout.write(formatSummary(buildSummary(db, month)));
     console.log(`(Excludes bank charges covered by fixed bills)\n`);
   } else if (command === 'splitwise' && args[1] === 'import') {
     const monthIndex = args.indexOf('--month');

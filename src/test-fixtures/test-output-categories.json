@@ -1,0 +1,15 @@
+{
+  "columns": [
+    {"column": "A", "header": "Year", "group": null, "role": "year"},
+    {"column": "B", "header": "Date", "group": null, "role": "month_date"},
+    {"column": "C", "header": "Snacks", "group": "Meals", "role": "leaf_category"},
+    {"column": "D", "header": "Purchases", "group": "Shopping", "role": "leaf_category"},
+    {"column": "E", "header": "Rent", "group": "Living", "role": "leaf_category"}
+  ],
+  "tierGroups": {
+    "need": ["Meals"],
+    "want": ["Shopping"],
+    "gifting": [],
+    "savings": []
+  }
+}

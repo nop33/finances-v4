@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { writeFileSync, unlinkSync } from 'fs';
 import { loadCategories } from './categories.js';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
@@ -62,5 +63,49 @@ describe('Categories module', () => {
 
     const uniqueGroups = new Set(others.map(c => c.group));
     assert.ok(uniqueGroups.size >= 4);
+  });
+
+  it('rejects leaf columns outside C..CL and duplicate letters', () => {
+    const invalid = './test-invalid-column.json';
+    writeFileSync(invalid, JSON.stringify({
+      columns: [
+        { column: 'A', header: 'Snacks', group: 'Meals', role: 'leaf_category' }
+      ]
+    }));
+    try {
+      assert.throws(() => loadCategories(invalid), /must be a sheet letter from C to CL/);
+    } finally {
+      unlinkSync(invalid);
+    }
+
+    const duplicate = './test-duplicate-column.json';
+    writeFileSync(duplicate, JSON.stringify({
+      columns: [
+        { column: 'C', header: 'Snacks', group: 'Meals', role: 'leaf_category' },
+        { column: 'C', header: 'Purchases', group: 'Shopping', role: 'leaf_category' }
+      ]
+    }));
+    try {
+      assert.throws(() => loadCategories(duplicate), /Duplicate sheet column C/);
+    } finally {
+      unlinkSync(duplicate);
+    }
+  });
+
+  it('allows a leaf category without a sheet column', () => {
+    const path = './test-optional-column.json';
+    writeFileSync(path, JSON.stringify({
+      columns: [
+        { column: 'C', header: 'Snacks', group: 'Meals', role: 'leaf_category' },
+        { header: 'Notes', group: 'Meals', role: 'leaf_category' }
+      ]
+    }));
+    try {
+      const categories = loadCategories(path);
+      assert.strictEqual(categories.length, 2);
+      assert.strictEqual(categories[1].column, '');
+    } finally {
+      unlinkSync(path);
+    }
   });
 });
