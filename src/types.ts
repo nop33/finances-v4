@@ -57,6 +57,7 @@ export interface ParsedTransaction {
   sourceCard?: string;
   fileRowIndex: number;
   kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
+  category?: string;
 }
 
 export interface ParserResult {

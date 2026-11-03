@@ -76,6 +76,7 @@ export async function importTransactions(
       fileRowIndex: parsed.fileRowIndex,
       importedAt,
       kind: parsed.kind,
+      category: parsed.category,
       excluded,
     });
   }

@@ -38,10 +38,8 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     if (!startedDate) return;
 
     const date = startedDate.split(' ')[0];
-    // Revolut CSV: spending Amount is negative, Fee is positive.
-    // Spend (our convention: spending positive) is -(amount - fee).
-    // Example: Amount -24.85, Fee 0.25 → 25.10 paid.
-    const originalAmount = -normalizeAmount(amount - fee);
+    // Revolut CSV: spending Amount is negative. Fee is a separate row when present.
+    const originalAmount = -normalizeAmount(amount);
 
     const typeKey = normalizeRevolutType(type);
     let kind: ParsedTransaction['kind'] = 'expense';
@@ -64,6 +62,20 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
       fileRowIndex: index,
       kind,
     });
+
+    if (fee !== 0) {
+      transactions.push({
+        date,
+        merchant: `${merchant} fee`,
+        description: 'Fee',
+        originalAmount: normalizeAmount(Math.abs(fee)),
+        originalCurrency: currency,
+        source: 'revolut',
+        fileRowIndex: index,
+        kind: 'expense',
+        category: process.env.REVOLUT_FEE_CATEGORY,
+      });
+    }
   });
 
   return transactions;

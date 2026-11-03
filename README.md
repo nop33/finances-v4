@@ -23,7 +23,7 @@ This is the v4 feature set with auto-categorisation. It parses bank exports, con
 - **Cembra** (two cards): comma CSV with columns `Account number`, `Credit Card`, `Booking date`, `Merchant`, `Description`, `Type`, `Amount (CHF)`
 - **Swisscard** (two cards): comma CSV with columns `Transaction date`, `Merchant`, `Card number`, `Currency`, `Amount`, `Debit/Credit`
 - **Neon**: semicolon CSV with quoted headers `"Date";"Amount";...`. Amounts are already in CHF.
-- **Revolut**: comma CSV or XLSX with columns `Type`, `Started Date`, `Completed Date`, `Description`, `Amount`, `Currency`, `State`
+- **Revolut**: comma CSV or XLSX with columns `Type`, `Started Date`, `Completed Date`, `Description`, `Amount`, `Fee`, `Currency`, `State`. A non-zero `Fee` is imported as its own row (categorised with `REVOLUT_FEE_CATEGORY` when set), not folded into the charge.
 
 Files are auto-detected by their header format.
 
@@ -203,6 +203,7 @@ Set environment variables to override defaults:
 - `DB_PATH`: Database location (default: `./data/finances.sqlite`)
 - `CATEGORY_CONFIG`: Category configuration file (default: `./data/expences-columns.json`)
 - `FIXED_BILLS_CONFIG`: Fixed bills JSON (default: `./data/fixed-bills.json`)
+- `REVOLUT_FEE_CATEGORY`: Category for Revolut `Fee` rows (optional, e.g. `Banking/Fees`)
 
 ## Fixed bills
 
