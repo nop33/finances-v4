@@ -7,6 +7,7 @@ export interface FixedBill {
   category: string;
   monthlyAmount: number;
   renewalMonth?: number;
+  periodMonths?: number;
   merchantPatterns?: string[];
   activeFrom?: string;
   activeUntil?: string;
@@ -74,6 +75,15 @@ function validateFixedBills(bills: FixedBill[]): void {
       }
     }
 
+    if (bill.periodMonths !== undefined) {
+      if (!Number.isInteger(bill.periodMonths) || bill.periodMonths < 1 || bill.periodMonths > 12) {
+        throw new Error(`Bill ${bill.id} has invalid periodMonths: must be an integer between 1 and 12`);
+      }
+      if (bill.periodMonths > 1 && bill.renewalMonth === undefined) {
+        throw new Error(`Bill ${bill.id} needs renewalMonth as the anchor month when periodMonths is ${bill.periodMonths}`);
+      }
+    }
+
     if (bill.activeFrom && !/^\d{4}-\d{2}$/.test(bill.activeFrom)) {
       throw new Error(`Bill ${bill.id} has invalid activeFrom: must be in YYYY-MM format`);
     }
@@ -98,20 +108,22 @@ export function isBillActive(bill: FixedBill, yearMonth: string): boolean {
   return true;
 }
 
+export function billPeriodMonths(bill: FixedBill): number {
+  if (bill.periodMonths !== undefined) return bill.periodMonths;
+  return bill.renewalMonth ? 12 : 1;
+}
+
 export function isBillDue(bill: FixedBill, yearMonth: string): boolean {
-  if (!bill.renewalMonth) {
-    return true;
-  }
-  
-  const month = parseInt(yearMonth.split('-')[1]);
-  return month === bill.renewalMonth;
+  const period = billPeriodMonths(bill);
+  if (period === 1) return true;
+  const month = parseInt(yearMonth.split('-')[1], 10);
+  const anchor = bill.renewalMonth;
+  if (!anchor) return true;
+  return (((month - anchor) % period) + period) % period === 0;
 }
 
 export function getExpectedChargeAmount(bill: FixedBill): number {
-  if (bill.renewalMonth) {
-    return bill.monthlyAmount * 12;
-  }
-  return bill.monthlyAmount;
+  return bill.monthlyAmount * billPeriodMonths(bill);
 }
 
 // True when |amount - expected| / expected <= 10%. Off-band matches cover only if coverAnyAmount is set.
