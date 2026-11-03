@@ -5,6 +5,7 @@ import {
   loadFixedBills,
   isBillActive,
   isBillDue,
+  billPeriodMonths,
   getExpectedChargeAmount,
   matchesBillPattern,
   amountsMatchBill,
@@ -141,6 +142,43 @@ test('isBillDue returns true only in renewal month for annual bills', () => {
   assert.strictEqual(isBillDue(bill, '2024-12'), false);
 });
 
+test('loadFixedBills validates periodMonths range and requires an anchor', () => {
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  const invalidConfig = './test-invalid-period.json';
+  writeFileSync(invalidConfig, JSON.stringify({
+    bills: [{
+      id: 'test',
+      label: 'Test',
+      category: 'Living/Rent',
+      monthlyAmount: 100,
+      periodMonths: 3
+    }]
+  }));
+  try {
+    assert.throws(() => loadFixedBills(invalidConfig), /renewalMonth/);
+  } finally {
+    unlinkSync(invalidConfig);
+  }
+});
+
+test('isBillDue uses periodMonths and renewalMonth as the anchor', () => {
+  const quarterly: FixedBill = {
+    id: 'test',
+    label: 'Test',
+    category: 'Living/Rent',
+    monthlyAmount: 30,
+    periodMonths: 3,
+    renewalMonth: 1
+  };
+  assert.strictEqual(isBillDue(quarterly, '2024-01'), true);
+  assert.strictEqual(isBillDue(quarterly, '2024-02'), false);
+  assert.strictEqual(isBillDue(quarterly, '2024-04'), true);
+  assert.strictEqual(isBillDue(quarterly, '2024-07'), true);
+  assert.strictEqual(isBillDue(quarterly, '2024-10'), true);
+  assert.strictEqual(isBillDue(quarterly, '2024-12'), false);
+  assert.strictEqual(billPeriodMonths(quarterly), 3);
+});
+
 test('getExpectedChargeAmount returns monthlyAmount for monthly bills', () => {
   const bill: FixedBill = {
     id: 'test',
@@ -162,6 +200,18 @@ test('getExpectedChargeAmount returns annual amount for annual bills', () => {
   };
 
   assert.strictEqual(getExpectedChargeAmount(bill), 1200);
+});
+
+test('getExpectedChargeAmount multiplies monthlyAmount by periodMonths', () => {
+  const quarterly: FixedBill = {
+    id: 'test',
+    label: 'Test',
+    category: 'Living/Rent',
+    monthlyAmount: 30,
+    periodMonths: 3,
+    renewalMonth: 1
+  };
+  assert.strictEqual(getExpectedChargeAmount(quarterly), 90);
 });
 
 test('matchesBillPattern returns false for bills without patterns', () => {

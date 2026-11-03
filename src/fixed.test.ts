@@ -205,6 +205,29 @@ test('fixed unlink keeps a matching charge from covering a bill', () => {
   });
 });
 
+test('applyFixedBills flags a quarterly bill missing only in a due month', () => {
+  withBills('./test-fixed-quarterly.sqlite', [{
+    id: 'tax',
+    label: 'Quarterly tax',
+    category: 'Tech/Phone',
+    monthlyAmount: 30,
+    periodMonths: 3,
+    renewalMonth: 1,
+    merchantPatterns: ['tax office']
+  }], db => {
+    applyFixedBills(db, '2024-01');
+    const jan = db.getTransaction('fixed:tax:2024-01');
+    assert.ok(jan);
+    assert.strictEqual(jan.fixedMissing, true);
+    assert.strictEqual(jan.chfAmount, 30);
+
+    applyFixedBills(db, '2024-02');
+    const feb = db.getTransaction('fixed:tax:2024-02');
+    assert.ok(feb);
+    assert.strictEqual(feb.fixedMissing, false);
+  });
+});
+
 test('applyFixedBills is idempotent', () => {
   const dbPath = './test-fixed-idempotent.sqlite';
   const db = new DB(dbPath);
