@@ -26,14 +26,36 @@ function cookieValue(req: IncomingMessage, name: string): string | undefined {
   return undefined;
 }
 
-function authorized(req: IncomingMessage): boolean {
-  const expected = process.env.REVIEW_TOKEN || '';
-  const got = cookieValue(req, REVIEW_COOKIE) || '';
-  if (!expected || !got) return false;
-  const a = Buffer.from(got);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 5;
+
+export function validateReviewToken(token: string | undefined): string {
+  if (!token) {
+    throw new Error('REVIEW_TOKEN is required to start the review server');
+  }
+  if (token.length < 24) {
+    throw new Error('REVIEW_TOKEN must be at least 24 characters');
+  }
+  return token;
+}
+
+function requestIsHttps(req: IncomingMessage): boolean {
+  if (req.socket && (req.socket as any).encrypted) return true;
+  const raw = req.headers['x-forwarded-proto'];
+  const proto = (Array.isArray(raw) ? raw[0] : raw || '').split(',')[0].trim().toLowerCase();
+  return proto === 'https';
+}
+
+function clientIp(req: IncomingMessage): string {
+  const fwd = req.headers['x-forwarded-for'];
+  const first = (Array.isArray(fwd) ? fwd[0] : fwd || '').split(',')[0].trim();
+  return first || req.socket?.remoteAddress || 'unknown';
+}
+
+function sessionCookie(id: string, req: IncomingMessage, maxAge = 2592000): string {
+  let cookie = `${REVIEW_COOKIE}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+  if (requestIsHttps(req)) cookie += '; Secure';
+  return cookie;
 }
 
 function escapeHtml(text: string | undefined | null): string {
@@ -65,10 +87,35 @@ export class WebServer {
   private db: DB;
   private categories: Category[];
   private undoStack: UndoState[] = [];
+  private sessions = new Set<string>();
+  private loginFailures = new Map<string, number[]>();
 
   constructor(db: DB) {
     this.db = db;
     this.categories = loadCategories();
+  }
+
+  createSession(): string {
+    const id = crypto.randomBytes(24).toString('hex');
+    this.sessions.add(id);
+    return id;
+  }
+
+  private isAuthorized(req: IncomingMessage): boolean {
+    const sid = cookieValue(req, REVIEW_COOKIE);
+    return !!sid && this.sessions.has(sid);
+  }
+
+  private loginAllowed(ip: string, now = Date.now()): boolean {
+    const times = (this.loginFailures.get(ip) || []).filter(t => now - t < LOGIN_WINDOW_MS);
+    this.loginFailures.set(ip, times);
+    return times.length < LOGIN_MAX_FAILURES;
+  }
+
+  private recordLoginFailure(ip: string, now = Date.now()): void {
+    const times = (this.loginFailures.get(ip) || []).filter(t => now - t < LOGIN_WINDOW_MS);
+    times.push(now);
+    this.loginFailures.set(ip, times);
   }
 
   getReviewQueue(options: ReviewQueueOptions): Transaction[] {
@@ -243,11 +290,15 @@ export class WebServer {
         this.handleLogin(req, res);
         return;
       }
+      if (url.pathname === '/logout' && (req.method === 'GET' || req.method === 'POST')) {
+        this.handleLogout(req, res);
+        return;
+      }
 
       const isApi = url.pathname.startsWith('/api/');
       const isPage = url.pathname === '/' || url.pathname === '' || url.pathname === '/review'
         || url.pathname === '/transactions' || url.pathname === '/twint';
-      if (!authorized(req)) {
+      if (!this.isAuthorized(req)) {
         if (isApi) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized' }));
@@ -280,7 +331,7 @@ export class WebServer {
       } else if (url.pathname === '/api/twint' && req.method === 'POST') {
         this.handleAddTwint(req, res);
       } else if (url.pathname === '/api/twint' && req.method === 'GET') {
-        this.handleGetTwint(req, res);
+        this.handleGetTwint(req, res, url);
       } else if (url.pathname.startsWith('/api/twint/') && req.method === 'DELETE') {
         this.handleDeleteTwint(req, res, url);
       } else if (url.pathname === '/review') {
@@ -328,22 +379,41 @@ export class WebServer {
 
   private handleLogin(req: IncomingMessage, res: ServerResponse): void {
     this.readJson(req, res, (parsed) => {
+      const ip = clientIp(req);
+      if (!this.loginAllowed(ip)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Too many login attempts' }));
+        return;
+      }
       const token = typeof parsed.token === 'string' ? parsed.token : '';
       const expected = process.env.REVIEW_TOKEN || '';
       const a = Buffer.from(token);
       const b = Buffer.from(expected);
       const ok = !!expected && a.length === b.length && crypto.timingSafeEqual(a, b);
       if (!ok) {
+        this.recordLoginFailure(ip);
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
       }
+      const sid = this.createSession();
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Set-Cookie': `${REVIEW_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000`
+        'Set-Cookie': sessionCookie(sid, req)
       });
       res.end(JSON.stringify({ success: true }));
     });
+  }
+
+  private handleLogout(req: IncomingMessage, res: ServerResponse): void {
+    const sid = cookieValue(req, REVIEW_COOKIE);
+    if (sid) this.sessions.delete(sid);
+    const headers = {
+      'Content-Type': req.method === 'GET' ? 'text/html' : 'application/json',
+      'Set-Cookie': sessionCookie('', req, 0)
+    };
+    res.writeHead(200, headers);
+    res.end(req.method === 'GET' ? this.getLoginPageHTML() : JSON.stringify({ success: true }));
   }
 
   private handleReviewQueue(req: IncomingMessage, res: ServerResponse): void {
@@ -552,11 +622,15 @@ export class WebServer {
     });
   }
 
-  private handleGetTwint(req: IncomingMessage, res: ServerResponse): void {
-    const currentMonth = new Date().toISOString().substring(0, 7);
-    const transactions = this.db.getTransactionsByMonth(currentMonth);
+  private handleGetTwint(req: IncomingMessage, res: ServerResponse, url: URL): void {
+    const month = url.searchParams.get('month') || new Date().toISOString().substring(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid month parameter' }));
+      return;
+    }
+    const transactions = this.db.getTransactionsByMonth(month);
     const twintTransactions = transactions.filter(t => t.source === 'twint');
-    
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(twintTransactions));
   }
@@ -748,6 +822,7 @@ export class WebServer {
       <p>Add Twint transactions manually (no export available).</p>
       <a href="/twint" class="btn">Add Twint</a>
     </div>
+    <p style="text-align:center;margin-top:8px"><a href="/logout" style="color:#007AFF">Log out</a></p>
   </div>
 </body>
 </html>`;
@@ -1559,6 +1634,7 @@ export class WebServer {
       <a href="/">Home</a>
       <a href="/review">Review</a>
       <a href="/transactions">List</a>
+      <a href="/logout">Log out</a>
     </div>
     <h1>Twint Prepaid</h1>
     <div class="card">
@@ -1585,7 +1661,11 @@ export class WebServer {
       </form>
     </div>
     <div class="transactions-list">
-      <h2>This Month's Twint Transactions</h2>
+      <h2>Twint transactions</h2>
+      <div class="form-group">
+        <label for="month-input">Month</label>
+        <input type="month" id="month-input">
+      </div>
       <div id="transactions"></div>
     </div>
   </div>
@@ -1617,9 +1697,16 @@ export class WebServer {
       const res = await fetch('/api/categories');
       categories = await res.json();
     }
+    const monthInput = document.getElementById('month-input');
+    monthInput.value = localStorage.getItem('reviewMonth') || new Date().toISOString().substring(0, 7);
+    monthInput.addEventListener('change', () => {
+      localStorage.setItem('reviewMonth', monthInput.value);
+      loadTransactions();
+    });
     async function loadTransactions() {
       try {
-        const res = await fetch('/api/twint');
+        const month = monthInput.value;
+        const res = await fetch('/api/twint?month=' + encodeURIComponent(month));
         const transactions = await res.json();
         const container = document.getElementById('transactions');
         if (transactions.length === 0) {
@@ -1734,8 +1821,10 @@ export class WebServer {
 }
 
 export function startServer(db: DB, port: number = 4321, host: string = '127.0.0.1'): void {
-  if (!process.env.REVIEW_TOKEN) {
-    console.error('Error: REVIEW_TOKEN is required to start the review server');
+  try {
+    validateReviewToken(process.env.REVIEW_TOKEN);
+  } catch (error: any) {
+    console.error(`Error: ${error.message}`);
     process.exit(1);
   }
   const server = new WebServer(db);

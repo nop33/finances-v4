@@ -1,15 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { DB } from './db.js';
-import { WebServer } from './web-server.js';
+import { WebServer, validateReviewToken } from './web-server.js';
 import { Transaction } from './types.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const REVIEW_TOKEN = 'test-review-token';
+const REVIEW_TOKEN = 'test-review-token-xx24ch';
 process.env.REVIEW_TOKEN = REVIEW_TOKEN;
-const AUTH_HEADERS = { cookie: `review_token=${REVIEW_TOKEN}` };
+
+function authFor(server: WebServer): { cookie: string } {
+  return { cookie: `review_token=${server.createSession()}` };
+}
 
 test('WebServer: review queue in full mode includes all unreviewed', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
@@ -662,7 +665,7 @@ test('WebServer: malformed JSON in POST requests returns 400', () => {
     const acceptReq = {
       method: 'POST',
       url: '/api/accept',
-      headers: AUTH_HEADERS,
+      headers: authFor(server),
       on: (event: string, handler: Function) => {
         if (event === 'data') {
           handler('{invalid json}');
@@ -692,7 +695,7 @@ test('WebServer: malformed JSON in POST requests returns 400', () => {
     const correctReq = {
       method: 'POST',
       url: '/api/correct',
-      headers: AUTH_HEADERS,
+      headers: authFor(server),
       on: (event: string, handler: Function) => {
         if (event === 'data') {
           handler('not json at all');
@@ -755,7 +758,7 @@ test('WebServer: add twint transaction with valid data', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(reqData);
@@ -825,7 +828,7 @@ test('WebServer: add twint transaction validates required fields', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(JSON.stringify({ date: '2024-10-15', amount: 25.50 }));
@@ -857,7 +860,7 @@ test('WebServer: add twint transaction validates required fields', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(JSON.stringify({ date: '2024-10-15', merchant: 'Test', amount: -10 }));
@@ -889,7 +892,7 @@ test('WebServer: add twint transaction validates required fields', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(JSON.stringify({ date: '15-10-2024', merchant: 'Test', amount: 10 }));
@@ -954,7 +957,7 @@ test('WebServer: twint transactions have unique IDs for same-day duplicates', as
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(reqData);
@@ -984,7 +987,7 @@ test('WebServer: twint transactions have unique IDs for same-day duplicates', as
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(reqData);
@@ -1064,7 +1067,7 @@ test('WebServer: delete twint transaction', () => {
     const req = {
       method: 'DELETE',
       url: '/api/twint/twi-test123',
-      headers: AUTH_HEADERS
+      headers: authFor(server)
     } as any;
 
     let statusCode = 0;
@@ -1128,7 +1131,7 @@ test('WebServer: cannot delete non-twint transaction', () => {
     const req = {
       method: 'DELETE',
       url: '/api/twint/bank-tx123',
-      headers: AUTH_HEADERS
+      headers: authFor(server)
     } as any;
 
     let statusCode = 0;
@@ -1218,7 +1221,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') handler(identicalData);
           else if (event === 'end') handler();
@@ -1245,7 +1248,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') handler(identicalData);
           else if (event === 'end') handler();
@@ -1273,7 +1276,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'DELETE',
         url: `/api/twint/${idA}`,
-        headers: AUTH_HEADERS
+        headers: authFor(server)
       } as any;
 
       const res = {
@@ -1294,7 +1297,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: AUTH_HEADERS,
+        headers: authFor(server),
         on: (event: string, handler: Function) => {
           if (event === 'data') handler(identicalData);
           else if (event === 'end') handler();
@@ -1368,13 +1371,20 @@ function mockRes(resolve: (value: { statusCode: number; responseBody: string; he
   } as any;
 }
 
-function request(server: WebServer, opts: { method?: string; url: string; body?: unknown; headers?: Record<string, string> }) {
+function request(server: WebServer, opts: {
+  method?: string;
+  url: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  socket?: { remoteAddress?: string; encrypted?: boolean };
+}) {
   return new Promise<{ statusCode: number; responseBody: string; headers: Record<string, string> }>((resolve) => {
     const body = opts.body === undefined ? undefined : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body));
     const req = {
       method: opts.method || 'GET',
       url: opts.url,
-      headers: opts.headers ?? AUTH_HEADERS,
+      headers: opts.headers ?? authFor(server),
+      socket: opts.socket || { remoteAddress: '127.0.0.1' },
       on: (event: string, handler: Function) => {
         if (event === 'data' && body !== undefined) handler(body);
         if (event === 'end') handler();
@@ -1438,12 +1448,15 @@ test('WebServer: login sets a cookie that unlocks API routes', async () => {
     assert.strictEqual(login.statusCode, 200);
     assert.ok(login.headers['Set-Cookie']?.includes('review_token='));
     assert.ok(login.headers['Set-Cookie']?.includes('HttpOnly'));
+    assert.ok(!login.headers['Set-Cookie']?.includes(REVIEW_TOKEN), 'cookie stores a session id, not the token');
+    assert.ok(!login.headers['Set-Cookie']?.includes('Secure'));
 
+    const sessionCookie = login.headers['Set-Cookie'].split(';')[0];
     const authed = await request(server, {
       method: 'POST',
       url: '/api/review-queue',
       body: { month: '2024-10', mode: 'full' },
-      headers: { cookie: `review_token=${REVIEW_TOKEN}` }
+      headers: { cookie: sessionCookie }
     });
     assert.strictEqual(authed.statusCode, 200);
     assert.ok(Array.isArray(JSON.parse(authed.responseBody)));
@@ -1516,6 +1529,163 @@ test('WebServer: twint form accepts an optional category', async () => {
     assert.strictEqual(noCat.statusCode, 200);
     const tx2 = db.getTransaction(JSON.parse(noCat.responseBody).id);
     assert.ok(!tx2?.reviewed);
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: session cookie is Secure over HTTPS', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const viaHeader = await request(server, {
+      method: 'POST',
+      url: '/login',
+      body: { token: REVIEW_TOKEN },
+      headers: { 'x-forwarded-proto': 'https' }
+    });
+    assert.strictEqual(viaHeader.statusCode, 200);
+    assert.ok(viaHeader.headers['Set-Cookie']?.includes('Secure'));
+
+    const viaSocket = await request(server, {
+      method: 'POST',
+      url: '/login',
+      body: { token: REVIEW_TOKEN },
+      headers: {},
+      socket: { remoteAddress: '127.0.0.1', encrypted: true }
+    });
+    assert.strictEqual(viaSocket.statusCode, 200);
+    assert.ok(viaSocket.headers['Set-Cookie']?.includes('Secure'));
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: logout drops the session', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+    const login = await request(server, { method: 'POST', url: '/login', body: { token: REVIEW_TOKEN }, headers: {} });
+    const cookie = login.headers['Set-Cookie'].split(';')[0];
+
+    const before = await request(server, { url: '/api/categories', headers: { cookie } });
+    assert.strictEqual(before.statusCode, 200);
+
+    const logout = await request(server, { method: 'POST', url: '/logout', headers: { cookie } });
+    assert.strictEqual(logout.statusCode, 200);
+    assert.ok(logout.headers['Set-Cookie']?.includes('Max-Age=0'));
+
+    const after = await request(server, { url: '/api/categories', headers: { cookie } });
+    assert.strictEqual(after.statusCode, 401);
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: login is throttled after 5 failures per IP', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+    const ipA = { remoteAddress: '198.51.100.10' };
+    const ipB = { remoteAddress: '198.51.100.11' };
+
+    for (let i = 0; i < 5; i++) {
+      const fail = await request(server, {
+        method: 'POST', url: '/login', body: { token: 'wrong' }, headers: {}, socket: ipA
+      });
+      assert.strictEqual(fail.statusCode, 401, `failure ${i + 1} should be 401`);
+    }
+    const blocked = await request(server, {
+      method: 'POST', url: '/login', body: { token: REVIEW_TOKEN }, headers: {}, socket: ipA
+    });
+    assert.strictEqual(blocked.statusCode, 429);
+
+    const other = await request(server, {
+      method: 'POST', url: '/login', body: { token: 'wrong' }, headers: {}, socket: ipB
+    });
+    assert.strictEqual(other.statusCode, 401);
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('serve refuses a REVIEW_TOKEN shorter than 24 characters', () => {
+  assert.throws(() => validateReviewToken(undefined), /required/);
+  assert.throws(() => validateReviewToken(''), /required/);
+  assert.throws(() => validateReviewToken('x'.repeat(23)), /24 characters/);
+  assert.strictEqual(validateReviewToken('x'.repeat(24)), 'x'.repeat(24));
+});
+
+test('WebServer: GET /api/twint filters by optional month', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+    const html = (server as any).getTwintPageHTML();
+    assert.ok(html.includes('id="month-input"'));
+    assert.ok(html.includes('/api/twint?month='));
+
+    await request(server, {
+      method: 'POST',
+      url: '/api/twint',
+      body: { date: '2024-10-15', merchant: 'October Kiosk', amount: 4.5 }
+    });
+    await request(server, {
+      method: 'POST',
+      url: '/api/twint',
+      body: { date: '2024-09-02', merchant: 'September Kiosk', amount: 2 }
+    });
+
+    const oct = await request(server, { url: '/api/twint?month=2024-10' });
+    assert.strictEqual(oct.statusCode, 200);
+    const octRows = JSON.parse(oct.responseBody);
+    assert.strictEqual(octRows.length, 1);
+    assert.strictEqual(octRows[0].merchant, 'October Kiosk');
+
+    const sep = await request(server, { url: '/api/twint?month=2024-09' });
+    assert.strictEqual(sep.statusCode, 200);
+    const sepRows = JSON.parse(sep.responseBody);
+    assert.strictEqual(sepRows.length, 1);
+    assert.strictEqual(sepRows[0].merchant, 'September Kiosk');
+
+    const current = await request(server, { url: '/api/twint' });
+    assert.strictEqual(current.statusCode, 200);
+    assert.ok(Array.isArray(JSON.parse(current.responseBody)));
+
+    const bad = await request(server, { url: '/api/twint?month=nope' });
+    assert.strictEqual(bad.statusCode, 400);
+
     db.close();
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
