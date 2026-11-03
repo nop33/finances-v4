@@ -105,7 +105,7 @@ node dist/cli.js summary --month 2024-10
 - **categorise --month YYYY-MM**: Auto-categorise all unreviewed transactions for the specified month
 - **list --month YYYY-MM**: List all transactions for the specified month
 - **correct <txId> <category>**: Manually correct a transaction's category, teaching merchant memory for future similar transactions
-- **exclude-apply --month YYYY-MM [--dry-run]**: Apply exclude-rules to a month. `--dry-run` prints which rule (or kind) matches each row and does not write. Optional rule fields: `source` (bank), `direction` (`in`/`out` by sign), `match: "exact"` (whole merchant). Existing substring rules stay the same.
+- **exclude-apply --month YYYY-MM [--dry-run]**: Apply exclude-rules to a month. `--dry-run` prints every matching reason (kind and each rule) per row and does not write. Optional rule fields: `source` (bank), `direction` (`in`/`out` by sign), `match: "exact"` (whole merchant). Existing substring rules stay the same. Own-account top-ups are excluded on the sending bank (`source` + `direction: "out"` + exact merchant), not on the receiving Revolut top-up.
 - **fixed unlink <txId>** / **fixed relink <txId>**: Mark a bank charge as not a bill payment, or allow `fixed apply` to cover it again. Stored as `fixed_override` like `exclude_override`.
 - **ledger --month YYYY-MM --out file.csv**: Counted (non-excluded, not covered-by-bill) transactions as CSV. Splits become one row per part. Columns: date, source, merchant, amount, category, splitwise_adjustment, reviewed. Sorted by date then id. A bank charge whose merchant tokens overlap a Splitwise row within ±31 days, with `|share| <= charge`, gets that share in `splitwise_adjustment` (each Splitwise row links at most once). Linking is display-only and does not change totals. Displayed amounts use largest-remainder rounding so they sum to the month total.
 - **expences-row --month YYYY-MM --out file.json**: One monthly Expences row from `CATEGORY_CONFIG` leaf columns (letters C–CL). JSON `{month, cells, unmapped, total, cellsSum}`. Every mapped column is present (0 if no spend). Categories with spend but no column are listed in `unmapped`. Cell and unmapped amounts use largest-remainder rounding so they sum to the month total. Formula columns are not written.
@@ -205,6 +205,7 @@ Set environment variables to override defaults:
 - `CATEGORY_CONFIG`: Category configuration file (default: `./data/expences-columns.json`)
 - `FIXED_BILLS_CONFIG`: Fixed bills JSON (default: `./data/fixed-bills.json`)
 - `REVOLUT_FEE_CATEGORY`: Category for Revolut `Fee` rows (optional, e.g. `Banking/Fees`)
+- `OWN_ACCOUNTS_CONFIG`: JSON list of own-account names (default: `./.own-accounts.json`). A Revolut `Transfer` is an own-account transfer only when the counterparty matches a name (after stripping a leading `To`/`From`). Outgoing transfers to anyone else stay as expenses for review. Incoming person transfers stay `transfer` (auto-excluded).
 
 ## Fixed bills
 

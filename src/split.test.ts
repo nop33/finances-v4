@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { unlinkSync } from 'fs';
+import { unlinkSync, writeFileSync } from 'fs';
 import { DB } from './db.js';
 import { Transaction } from './types.js';
 import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
@@ -133,6 +133,10 @@ test('month list keeps the original row and shows its parts', () => {
 
 test('category totals skip excluded Revolut top-ups and transfers and still match the grand total after a split', async () => {
   const dbPath = './test-split-exclude-totals.sqlite';
+  const ownPath = './test-own-accounts-split.json';
+  writeFileSync(ownPath, JSON.stringify(['savings space']));
+  const prevOwn = process.env.OWN_ACCOUNTS_CONFIG;
+  process.env.OWN_ACCOUNTS_CONFIG = ownPath;
   const db = new DB(dbPath);
   try {
     const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
@@ -162,7 +166,10 @@ Transfer,Current,2024-11-04 09:00:00,2024-11-04 09:00:15,To savings space,-50.00
     assert.ok(!Object.values(totals).includes(-200), 'Topup must not appear in category totals');
     assert.ok(!Object.values(totals).includes(50), 'Transfer must not appear in category totals');
   } finally {
+    if (prevOwn === undefined) delete process.env.OWN_ACCOUNTS_CONFIG;
+    else process.env.OWN_ACCOUNTS_CONFIG = prevOwn;
     db.close();
     unlinkSync(dbPath);
+    unlinkSync(ownPath);
   }
 });

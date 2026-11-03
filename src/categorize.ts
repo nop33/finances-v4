@@ -1,5 +1,6 @@
 import { DB } from './db.js';
 import { Transaction } from './types.js';
+import { OUTGOING_PERSON_TRANSFER } from './parsers/revolut.js';
 
 const PAYMENT_PROCESSOR_PREFIXES = [
   'sumup\\*',
@@ -165,6 +166,9 @@ export function categorizeMonth(db: DB, yearMonth: string): void {
   for (const tx of transactions) {
     // Skip if reviewed, excluded, or already has a category (from fixed bills or manual correction)
     if (tx.reviewed || tx.excluded || tx.category) {
+      continue;
+    }
+    if (tx.explanation === OUTGOING_PERSON_TRANSFER) {
       continue;
     }
 

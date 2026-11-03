@@ -14,7 +14,7 @@ export type ExcludeCandidate = {
 export type ExcludeHit = {
   id: string;
   merchant: string;
-  reason: string;
+  reasons: string[];
   alreadyExcluded: boolean;
   includeOverride: boolean;
 };
@@ -58,42 +58,44 @@ export function ruleMatches(rule: ExcludeRule, tx: ExcludeCandidate): boolean {
   return merchantLower.includes(patternLower) || descriptionLower.includes(patternLower);
 }
 
-export function matchingExcludeRule(
+export function matchingExcludeRules(
   tx: ExcludeCandidate,
   rules: ExcludeRule[] = loadExcludeRules()
-): ExcludeRule | undefined {
-  return rules.find(rule => ruleMatches(rule, tx));
+): ExcludeRule[] {
+  return rules.filter(rule => ruleMatches(rule, tx));
 }
 
-export function excludeReason(
+export function excludeReasons(
   tx: ExcludeCandidate,
   rules: ExcludeRule[] = loadExcludeRules()
-): string | undefined {
+): string[] {
+  const reasons: string[] = [];
   if (tx.kind && ['transfer', 'income', 'card-payment', 'top-up', 'exchange'].includes(tx.kind)) {
-    return `kind:${tx.kind}`;
+    reasons.push(`kind:${tx.kind}`);
   }
-  const rule = matchingExcludeRule(tx, rules);
-  if (!rule) return undefined;
-  return `rule:${rule.description || rule.pattern}`;
+  for (const rule of matchingExcludeRules(tx, rules)) {
+    reasons.push(`rule:${rule.description || rule.pattern}`);
+  }
+  return reasons;
 }
 
 export function shouldExclude(
   tx: ExcludeCandidate,
   rules: ExcludeRule[] = loadExcludeRules()
 ): boolean {
-  return excludeReason(tx, rules) !== undefined;
+  return excludeReasons(tx, rules).length > 0;
 }
 
 export function listExcludeHits(db: DB, yearMonth: string): ExcludeHit[] {
   const rules = loadExcludeRules();
   const hits: ExcludeHit[] = [];
   for (const tx of db.getTransactionsByMonth(yearMonth)) {
-    const reason = excludeReason(tx, rules);
-    if (!reason) continue;
+    const reasons = excludeReasons(tx, rules);
+    if (reasons.length === 0) continue;
     hits.push({
       id: tx.id,
       merchant: tx.merchant,
-      reason,
+      reasons,
       alreadyExcluded: !!tx.excluded,
       includeOverride: tx.excludeOverride === 'include'
     });
@@ -103,7 +105,7 @@ export function listExcludeHits(db: DB, yearMonth: string): ExcludeHit[] {
 
 export function formatExcludeHit(hit: ExcludeHit): string {
   const skip = hit.includeOverride ? '  (skipped include override)' : '';
-  return `${hit.id}  ${hit.merchant}  ${hit.reason}${skip}`;
+  return `${hit.id}  ${hit.merchant}  ${hit.reasons.join(', ')}${skip}`;
 }
 
 export function applyExcludeRules(db: DB, yearMonth: string): number {

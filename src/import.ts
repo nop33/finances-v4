@@ -77,6 +77,7 @@ export async function importTransactions(
       importedAt,
       kind: parsed.kind,
       category: parsed.category,
+      explanation: parsed.explanation,
       excluded,
     });
   }

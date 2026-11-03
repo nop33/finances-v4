@@ -6,7 +6,9 @@ import { importTransactions, formatImportStats } from './import.js';
 import { ParsedTransaction, Transaction } from './types.js';
 import { parseRevolutCsv } from './parsers/revolut.js';
 import { importTransactionId } from './parsers/utils.js';
-import { unlinkSync } from 'fs';
+import { unlinkSync, writeFileSync } from 'fs';
+import { categorizeMonth } from './categorize.js';
+import { OUTGOING_PERSON_TRANSFER } from './parsers/revolut.js';
 
 function parsed(partial: Partial<ParsedTransaction> & { date: string; merchant: string; originalAmount: number }): ParsedTransaction {
   return {
@@ -163,6 +165,10 @@ describe('Import module', () => {
   });
 
   it('excludes Revolut Topup/Transfer/Exchange but keeps Card Refund as expense', async () => {
+    const ownPath = './test-own-accounts-import.json';
+    writeFileSync(ownPath, JSON.stringify(['savings space']));
+    const prevOwn = process.env.OWN_ACCOUNTS_CONFIG;
+    process.env.OWN_ACCOUNTS_CONFIG = ownPath;
     const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
 Card Payment,Current,2024-11-01 10:30:00,2024-11-01 10:30:05,COOP,-12.00,0,CHF,COMPLETED,1000.00
 Card Refund,Current,2024-11-02 11:00:00,2024-11-02 11:00:05,COOP Refund,5.00,0,CHF,COMPLETED,1005.00
@@ -170,6 +176,7 @@ Topup,Current,2024-11-03 09:00:00,2024-11-03 09:00:05,Top-up from debit card,80.
 Transfer,Current,2024-11-04 09:00:00,2024-11-04 09:00:15,To savings space,-40.00,0,CHF,COMPLETED,1045.00
 Exchange,Current,2024-11-05 09:00:00,2024-11-05 09:00:15,Exchanged to EUR,-20.00,0.50,EUR,COMPLETED,1025.00`;
 
+    try {
     await importTransactions(db, parseRevolutCsv(csv));
 
     const txs = db.getTransactionsByMonth('2024-11');
@@ -189,6 +196,31 @@ Exchange,Current,2024-11-05 09:00:00,2024-11-05 09:00:15,Exchanged to EUR,-20.00
     assert.strictEqual(topup?.excluded, true);
     assert.strictEqual(transfer?.excluded, true);
     assert.strictEqual(exchange?.excluded, true);
+    } finally {
+      if (prevOwn === undefined) delete process.env.OWN_ACCOUNTS_CONFIG;
+      else process.env.OWN_ACCOUNTS_CONFIG = prevOwn;
+      unlinkSync(ownPath);
+    }
+  });
+
+  it('imports an outgoing Revolut person transfer as an uncategorised expense', async () => {
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Transfer,Current,2024-11-06 09:00:00,2024-11-06 09:00:15,Alex Friend,-35.00,0,CHF,COMPLETED,965.00`;
+    await importTransactions(db, parseRevolutCsv(csv));
+    const tx = db.getTransactionsByMonth('2024-11').find(t => t.merchant === 'Alex Friend');
+    assert.ok(tx);
+    assert.strictEqual(tx.kind, 'expense');
+    assert.strictEqual(tx.excluded, false);
+    assert.strictEqual(tx.reviewed, false);
+    assert.ok(!tx.category);
+    assert.strictEqual(tx.explanation, OUTGOING_PERSON_TRANSFER);
+    assert.strictEqual(tx.chfAmount, 35);
+
+    categorizeMonth(db, '2024-11');
+    const after = db.getTransaction(tx.id);
+    assert.ok(!after?.category);
+    assert.strictEqual(after?.explanation, OUTGOING_PERSON_TRANSFER);
+    assert.strictEqual(after?.reviewed, false);
   });
 });
 
