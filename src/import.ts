@@ -81,6 +81,8 @@ export async function importTransactions(
     });
   }
 
+  db.migrateFoldedRevolutFees(transactions);
+
   const stats: ImportStats = { new: 0, unchanged: 0 };
   for (const tx of transactions) {
     if (db.getTransaction(tx.id)) stats.unchanged++;

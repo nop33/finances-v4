@@ -38,16 +38,16 @@ Card Payment,Current,2024-10-16 14:20:00,,PENDING SHOP,-35.00,0,EUR,PENDING,950.
     process.env.REVOLUT_FEE_CATEGORY = 'Tech/Phone';
     try {
       const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
-Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-24.85,0.25,CHF,COMPLETED,1000.00
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1000.00
 Card Payment,Current,2024-10-16 10:30:00,2024-10-16 10:30:05,COOP,-42.50,1.50,CHF,COMPLETED,950.00`;
 
       const transactions = parseRevolutCsv(csv);
 
       assert.strictEqual(transactions.length, 4);
       assert.strictEqual(transactions[0].merchant, 'MIGROS');
-      assert.strictEqual(transactions[0].originalAmount, 24.85);
+      assert.strictEqual(transactions[0].originalAmount, 18.40);
       assert.strictEqual(transactions[1].merchant, 'MIGROS fee');
-      assert.strictEqual(transactions[1].originalAmount, 0.25);
+      assert.strictEqual(transactions[1].originalAmount, 0.60);
       assert.strictEqual(transactions[1].description, 'Fee');
       assert.strictEqual(transactions[1].category, 'Tech/Phone');
       assert.strictEqual(transactions[2].originalAmount, 42.50);
