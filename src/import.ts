@@ -76,9 +76,12 @@ export async function importTransactions(
       fileRowIndex: parsed.fileRowIndex,
       importedAt,
       kind: parsed.kind,
+      category: parsed.category,
       excluded,
     });
   }
+
+  db.migrateFoldedRevolutFees(transactions);
 
   const stats: ImportStats = { new: 0, unchanged: 0 };
   for (const tx of transactions) {

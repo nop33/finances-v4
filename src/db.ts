@@ -5,6 +5,21 @@ import { importTransactionId, repairMojibake, swisscardSignedAmount } from './pa
 export const BANK_SOURCES = new Set(['cembra', 'swisscard', 'neon', 'revolut']);
 export const MONTH_COVER_MIN_DISTINCT_DATES = 5;
 
+function scaleSplitsTo(splits: TransactionSplit[], newTotal: number): TransactionSplit[] {
+  const newCents = Math.round(newTotal * 100);
+  const oldCents = splits.map(s => Math.round(s.chfAmount * 100));
+  const oldSum = oldCents.reduce((sum, cents) => sum + cents, 0);
+  if (oldSum === 0 || splits.length === 0) return splits;
+  const raw = oldCents.map(cents => (cents * newCents) / oldSum);
+  const floors = raw.map(value => Math.floor(value));
+  let remainder = newCents - floors.reduce((sum, cents) => sum + cents, 0);
+  const order = raw
+    .map((value, i) => ({ i, frac: value - floors[i] }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let n = 0; n < remainder; n++) floors[order[n % order.length].i]++;
+  return splits.map((split, i) => ({ ...split, chfAmount: floors[i] / 100 }));
+}
+
 export interface FileImportRecord {
   file: string;
   source?: string;
@@ -121,6 +136,10 @@ export class DB {
     this.ensureColumn('transactions', 'exclude_override', 'TEXT');
     this.ensureColumn('transactions', 'fixed_override', 'TEXT');
     this.migrateImportIds();
+  }
+
+  runInTransaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   private ensureColumn(table: string, column: string, type: string): void {
@@ -261,6 +280,85 @@ export class DB {
           rename.run(newId, row.id);
           row.id = newId;
         }
+      }
+    });
+    apply();
+  }
+
+  // Turn a pre-split Revolut row (fee folded into the amount) into charge + fee.
+  // Incoming rows already use the exclusive charge amount and a sibling Fee row.
+  migrateFoldedRevolutFees(incoming: Transaction[]): void {
+    const apply = this.db.transaction(() => {
+      this.db.pragma('defer_foreign_keys = ON');
+      const fees = incoming.filter(tx => tx.source === 'revolut' && tx.description === 'Fee');
+      for (const fee of fees) {
+        if (this.getTransaction(fee.id)) continue;
+        const charge = incoming.find(tx =>
+          tx.source === 'revolut' &&
+          tx.id !== fee.id &&
+          tx.date === fee.date &&
+          tx.fileRowIndex === fee.fileRowIndex
+        );
+        if (!charge || this.getTransaction(charge.id)) continue;
+
+        const inclusiveCents = Math.round((charge.originalAmount + fee.originalAmount) * 100);
+        const old = this.db.prepare(`
+          SELECT id FROM transactions
+          WHERE source = 'revolut' AND date = ? AND merchant = ?
+            AND CAST(ROUND(original_amount * 100) AS INTEGER) = ?
+            AND file_row_index = ?
+        `).get(charge.date, charge.merchant, inclusiveCents, charge.fileRowIndex) as { id: string } | undefined;
+        if (!old) continue;
+
+        const oldTx = this.getTransaction(old.id);
+        if (!oldTx) continue;
+
+        const splits = this.getSplits(old.id);
+        const feeCents = Math.round(fee.originalAmount * 100);
+        const feeSplitAt = splits.findIndex(s => Math.round(s.chfAmount * 100) === feeCents);
+        let movedFeeCategory: string | undefined;
+        let chargeSplits = splits;
+        if (feeSplitAt >= 0) {
+          movedFeeCategory = splits[feeSplitAt].category;
+          chargeSplits = splits.filter((_, i) => i !== feeSplitAt);
+        }
+        if (chargeSplits.length > 0) {
+          chargeSplits = scaleSplitsTo(chargeSplits, charge.chfAmount);
+        }
+
+        this.db.prepare('UPDATE transactions SET original_amount = ?, chf_amount = ? WHERE id = ?')
+          .run(charge.originalAmount, charge.chfAmount, old.id);
+        if (charge.id !== old.id) {
+          this.db.prepare('UPDATE transaction_splits SET transaction_id = ? WHERE transaction_id = ?')
+            .run(charge.id, old.id);
+          this.db.prepare('UPDATE transactions SET id = ? WHERE id = ?').run(charge.id, old.id);
+        }
+        this.db.prepare('DELETE FROM transaction_splits WHERE transaction_id = ?').run(charge.id);
+        if (chargeSplits.length >= 2) {
+          const insertSplit = this.db.prepare(
+            'INSERT INTO transaction_splits (transaction_id, category, chf_amount) VALUES (?, ?, ?)'
+          );
+          for (const part of chargeSplits) {
+            insertSplit.run(charge.id, part.category, part.chfAmount);
+          }
+        }
+
+        this.insertTransaction({
+          ...oldTx,
+          id: fee.id,
+          merchant: fee.merchant,
+          description: fee.description,
+          originalAmount: fee.originalAmount,
+          originalCurrency: fee.originalCurrency,
+          chfAmount: fee.chfAmount,
+          fileRowIndex: fee.fileRowIndex,
+          kind: 'expense',
+          category: fee.category || movedFeeCategory,
+          coveredByFixedBill: undefined,
+          fixedChanged: false,
+          fixedMissing: false,
+          splits: undefined
+        });
       }
     });
     apply();

@@ -450,3 +450,106 @@ test('import records file coverage and distinct bank dates', async () => {
     unlinkSync(dbPath);
   }
 });
+
+test('Revolut fee rows keep stable ids across re-import', async () => {
+  const dbPath = './test-import-revolut-fee.sqlite';
+  const db = new DB(dbPath);
+  const prev = process.env.REVOLUT_FEE_CATEGORY;
+  process.env.REVOLUT_FEE_CATEGORY = 'Tech/Phone';
+  const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1000.00`;
+  try {
+    const first = await importTransactions(db, parseRevolutCsv(csv));
+    assert.deepStrictEqual(first, { new: 2, unchanged: 0 });
+    const afterFirst = db.getTransactionsByMonth('2024-10');
+    const charge = afterFirst.find(t => t.merchant === 'MIGROS');
+    const fee = afterFirst.find(t => t.merchant === 'MIGROS fee');
+    assert.ok(charge);
+    assert.ok(fee);
+    assert.strictEqual(charge.chfAmount, 18.40);
+    assert.strictEqual(fee.chfAmount, 0.60);
+    assert.strictEqual(fee.category, 'Tech/Phone');
+    const chargeId = charge.id;
+    const feeId = fee.id;
+    assert.notStrictEqual(chargeId, feeId);
+
+    const second = await importTransactions(db, parseRevolutCsv(csv));
+    assert.deepStrictEqual(second, { new: 0, unchanged: 2 });
+    const afterSecond = db.getTransactionsByMonth('2024-10');
+    assert.strictEqual(afterSecond.length, 2);
+    assert.strictEqual(afterSecond.find(t => t.merchant === 'MIGROS')?.id, chargeId);
+    assert.strictEqual(afterSecond.find(t => t.merchant === 'MIGROS fee')?.id, feeId);
+  } finally {
+    if (prev === undefined) delete process.env.REVOLUT_FEE_CATEGORY;
+    else process.env.REVOLUT_FEE_CATEGORY = prev;
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('re-import of a fee-folded Revolut row splits it in place with 0 new', async () => {
+  const dbPath = './test-import-revolut-fee-migrate.sqlite';
+  const db = new DB(dbPath);
+  const prev = process.env.REVOLUT_FEE_CATEGORY;
+  process.env.REVOLUT_FEE_CATEGORY = 'Tech/Phone';
+  const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1000.00`;
+  try {
+    const folded: ParsedTransaction = {
+      date: '2024-10-15',
+      merchant: 'MIGROS',
+      description: 'Card Payment',
+      originalAmount: 19,
+      originalCurrency: 'CHF',
+      source: 'revolut',
+      fileRowIndex: 0,
+      kind: 'expense',
+    };
+    const seeded = await importTransactions(db, [folded]);
+    assert.deepStrictEqual(seeded, { new: 1, unchanged: 0 });
+    const old = db.getTransactionsByMonth('2024-10')[0];
+    assert.ok(old);
+    assert.strictEqual(old.chfAmount, 19);
+    const oldId = old.id;
+    const totalBefore = db.getMonthTotal('2024-10');
+    assert.strictEqual(totalBefore, 19);
+
+    db.updateTransactionCategorization(oldId, 'Shopping', 1, 'manual', 'rule', {
+      newMerchant: false,
+      unusualAmount: false,
+      possibleDuplicate: false,
+      unconvertedFx: false,
+    });
+    db.markAsReviewed(oldId);
+    db.setFixedOverride(oldId, 'unlink');
+    db.setSplits(oldId, [
+      { category: 'Shopping', chfAmount: 18.40 },
+      { category: 'Tech/Phone', chfAmount: 0.60 },
+    ]);
+
+    const stats = await importTransactions(db, parseRevolutCsv(csv));
+    assert.deepStrictEqual(stats, { new: 0, unchanged: 2 });
+    assert.strictEqual(db.getMonthTotal('2024-10'), totalBefore);
+
+    const txs = db.getTransactionsByMonth('2024-10');
+    assert.strictEqual(txs.length, 2);
+    const charge = txs.find(t => t.merchant === 'MIGROS');
+    const fee = txs.find(t => t.merchant === 'MIGROS fee');
+    assert.ok(charge);
+    assert.ok(fee);
+    assert.notStrictEqual(charge.id, oldId);
+    assert.strictEqual(charge.chfAmount, 18.40);
+    assert.strictEqual(charge.category, 'Shopping');
+    assert.strictEqual(charge.reviewed, true);
+    assert.strictEqual(charge.fixedOverride, 'unlink');
+    assert.strictEqual(fee.chfAmount, 0.60);
+    assert.strictEqual(fee.category, 'Tech/Phone');
+    assert.strictEqual(charge.splits, undefined);
+    assert.strictEqual(db.getTransaction(oldId), undefined);
+  } finally {
+    if (prev === undefined) delete process.env.REVOLUT_FEE_CATEGORY;
+    else process.env.REVOLUT_FEE_CATEGORY = prev;
+    db.close();
+    unlinkSync(dbPath);
+  }
+});

@@ -49,52 +49,54 @@ export function applyFixedBills(db: DB, yearMonth: string): void {
   const bills = loadFixedBills();
   const activeBills = bills.filter(bill => isBillActive(bill, yearMonth));
 
-  clearMonthCoverage(db, yearMonth);
-  const allTransactions = db.getTransactionsByMonth(yearMonth);
+  db.runInTransaction(() => {
+    clearMonthCoverage(db, yearMonth);
+    const allTransactions = db.getTransactionsByMonth(yearMonth);
 
-  for (const bill of activeBills) {
-    const syntheticTxId = `fixed:${bill.id}:${yearMonth}`;
-    const existingTx = db.getTransaction(syntheticTxId);
+    for (const bill of activeBills) {
+      const syntheticTxId = `fixed:${bill.id}:${yearMonth}`;
+      const existingTx = db.getTransaction(syntheticTxId);
 
-    const syntheticTx: Transaction = {
-      id: syntheticTxId,
-      date: `${yearMonth}-15`,
-      source: 'fixed',
-      merchant: bill.label,
-      originalAmount: bill.monthlyAmount,
-      originalCurrency: 'CHF',
-      chfAmount: bill.monthlyAmount,
-      fileRowIndex: 0,
-      importedAt: new Date().toISOString(),
-      category: bill.category,
-      confidence: 1,
-      explanation: `fixed bill: ${bill.label}`,
-      reviewed: existingTx?.reviewed || false
-    };
+      const syntheticTx: Transaction = {
+        id: syntheticTxId,
+        date: `${yearMonth}-15`,
+        source: 'fixed',
+        merchant: bill.label,
+        originalAmount: bill.monthlyAmount,
+        originalCurrency: 'CHF',
+        chfAmount: bill.monthlyAmount,
+        fileRowIndex: 0,
+        importedAt: new Date().toISOString(),
+        category: bill.category,
+        confidence: 1,
+        explanation: `fixed bill: ${bill.label}`,
+        reviewed: existingTx?.reviewed || false
+      };
 
-    if (bill.merchantPatterns && bill.merchantPatterns.length > 0) {
-      const coverage = pickCoverage(bill, allTransactions, yearMonth);
-      syntheticTx.fixedMissing = coverage.missing;
-      syntheticTx.fixedChanged = coverage.changed;
+      if (bill.merchantPatterns && bill.merchantPatterns.length > 0) {
+        const coverage = pickCoverage(bill, allTransactions, yearMonth);
+        syntheticTx.fixedMissing = coverage.missing;
+        syntheticTx.fixedChanged = coverage.changed;
 
-      if (coverage.cover) {
-        db.markAsCoveredByFixedBill(coverage.cover.id, bill.label, coverage.changed);
+        if (coverage.cover) {
+          db.markAsCoveredByFixedBill(coverage.cover.id, bill.label, coverage.changed);
+        }
+        for (const tx of coverage.flagUncovered) {
+          db.flagAmountChanged(tx.id);
+        }
       }
-      for (const tx of coverage.flagUncovered) {
-        db.flagAmountChanged(tx.id);
-      }
+
+      db.insertTransaction(syntheticTx);
+      db.setFixedReviewFlags(syntheticTx.id, !!syntheticTx.fixedMissing, !!syntheticTx.fixedChanged);
     }
 
-    db.insertTransaction(syntheticTx);
-    db.setFixedReviewFlags(syntheticTx.id, !!syntheticTx.fixedMissing, !!syntheticTx.fixedChanged);
-  }
-
-  const keepIds = new Set(activeBills.map(bill => `fixed:${bill.id}:${yearMonth}`));
-  for (const tx of db.getTransactionsByMonth(yearMonth)) {
-    if (tx.source === 'fixed' && !keepIds.has(tx.id)) {
-      db.deleteTransaction(tx.id);
+    const keepIds = new Set(activeBills.map(bill => `fixed:${bill.id}:${yearMonth}`));
+    for (const tx of db.getTransactionsByMonth(yearMonth)) {
+      if (tx.source === 'fixed' && !keepIds.has(tx.id)) {
+        db.deleteTransaction(tx.id);
+      }
     }
-  }
+  });
 }
 
 function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth: string): {
