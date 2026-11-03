@@ -487,6 +487,54 @@ Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,
   }
 });
 
+test('re-import of a longer Revolut export converts folded rows without file position', async () => {
+  const dbPath = './test-import-revolut-fee-longer.sqlite';
+  const db = new DB(dbPath);
+  const prev = process.env.REVOLUT_FEE_CATEGORY;
+  process.env.REVOLUT_FEE_CATEGORY = 'Tech/Phone';
+  try {
+    const folded = (fileRowIndex: number): ParsedTransaction => ({
+      date: '2024-10-15',
+      merchant: 'MIGROS',
+      description: 'Card Payment',
+      originalAmount: 19,
+      originalCurrency: 'CHF',
+      source: 'revolut',
+      fileRowIndex,
+      kind: 'expense',
+    });
+    await importTransactions(db, [folded(0), folded(1)]);
+    const before = db.getTransactionsByMonth('2024-10');
+    assert.strictEqual(before.length, 2);
+    assert.ok(before.every(t => t.chfAmount === 19 && t.fileRowIndex < 2));
+    const oldIds = before.map(t => t.id);
+    const totalBefore = db.getMonthTotal('2024-10');
+    assert.strictEqual(totalBefore, 38);
+
+    const longer = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Card Payment,Current,2024-10-01 09:00:00,2024-10-01 09:00:05,COOP,-5.00,0,CHF,COMPLETED,1100.00
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1081.00
+Card Payment,Current,2024-10-15 16:00:00,2024-10-15 16:00:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1062.00`;
+    const stats = await importTransactions(db, parseRevolutCsv(longer));
+    assert.deepStrictEqual(stats, { new: 1, unchanged: 4 });
+    assert.strictEqual(db.getMonthTotal('2024-10'), totalBefore + 5);
+
+    const txs = db.getTransactionsByMonth('2024-10');
+    assert.strictEqual(txs.length, 5);
+    assert.ok(!txs.some(t => t.chfAmount === 19));
+    assert.strictEqual(txs.filter(t => t.merchant === 'MIGROS').length, 2);
+    assert.strictEqual(txs.filter(t => t.merchant === 'MIGROS fee').length, 2);
+    for (const id of oldIds) {
+      assert.strictEqual(db.getTransaction(id), undefined);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.REVOLUT_FEE_CATEGORY;
+    else process.env.REVOLUT_FEE_CATEGORY = prev;
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
 test('re-import of a fee-folded Revolut row splits it in place with 0 new', async () => {
   const dbPath = './test-import-revolut-fee-migrate.sqlite';
   const db = new DB(dbPath);
