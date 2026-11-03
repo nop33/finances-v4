@@ -290,6 +290,7 @@ export class DB {
   migrateFoldedRevolutFees(incoming: Transaction[]): void {
     const apply = this.db.transaction(() => {
       this.db.pragma('defer_foreign_keys = ON');
+      const claimedOldIds = new Set<string>();
       const fees = incoming.filter(tx => tx.source === 'revolut' && tx.description === 'Fee');
       for (const fee of fees) {
         if (this.getTransaction(fee.id)) continue;
@@ -302,13 +303,15 @@ export class DB {
         if (!charge || this.getTransaction(charge.id)) continue;
 
         const inclusiveCents = Math.round((charge.originalAmount + fee.originalAmount) * 100);
-        const old = this.db.prepare(`
+        const oldRows = this.db.prepare(`
           SELECT id FROM transactions
           WHERE source = 'revolut' AND date = ? AND merchant = ?
             AND CAST(ROUND(original_amount * 100) AS INTEGER) = ?
-            AND file_row_index = ?
-        `).get(charge.date, charge.merchant, inclusiveCents, charge.fileRowIndex) as { id: string } | undefined;
+          ORDER BY file_row_index, id
+        `).all(charge.date, charge.merchant, inclusiveCents) as Array<{ id: string }>;
+        const old = oldRows.find(row => !claimedOldIds.has(row.id));
         if (!old) continue;
+        claimedOldIds.add(old.id);
 
         const oldTx = this.getTransaction(old.id);
         if (!oldTx) continue;
