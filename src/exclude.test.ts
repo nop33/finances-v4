@@ -4,7 +4,7 @@ import { writeFileSync, unlinkSync } from 'fs';
 import { DB } from './db.js';
 import { Transaction } from './types.js';
 import { importTransactions } from './import.js';
-import { applyExcludeRules, setTransactionExcluded, loadExcludeRules } from './exclude.js';
+import { applyExcludeRules, formatExcludeHit, listExcludeHits, loadExcludeRules, setTransactionExcluded, shouldExclude } from './exclude.js';
 import { categorizeMonth } from './categorize.js';
 
 function insertTx(db: DB, tx: Partial<Transaction> & { id: string; chfAmount: number }): void {
@@ -140,6 +140,78 @@ test('exclude and include toggle a single row', () => {
   } finally {
     db.close();
     unlinkSync(dbPath);
+  }
+});
+
+test('exclude source, direction, and exact match do not drop a third-party bankx out', () => {
+  const path = './test-exclude-rules-scope.json';
+  writeFileSync(path, JSON.stringify([
+    { pattern: 'bankx', source: 'revolut', direction: 'in' },
+    { pattern: 'bankx', match: 'exact' }
+  ]));
+  const prev = process.env.EXCLUDE_RULES_CONFIG;
+  process.env.EXCLUDE_RULES_CONFIG = path;
+  try {
+    assert.strictEqual(shouldExclude({
+      merchant: 'bankx',
+      source: 'revolut',
+      originalAmount: -80,
+      kind: 'expense'
+    }), true, 'incoming own-account bankx');
+    assert.strictEqual(shouldExclude({
+      merchant: 'Shop BankX Ltd',
+      source: 'revolut',
+      originalAmount: 40,
+      kind: 'expense'
+    }), false, 'outgoing third party containing bankx');
+    assert.strictEqual(shouldExclude({
+      merchant: 'bankx',
+      source: 'neon',
+      originalAmount: 25,
+      kind: 'expense'
+    }), true, 'exact merchant bankx');
+    assert.strictEqual(shouldExclude({
+      merchant: 'Broker-XYZ Transfer',
+      source: 'neon',
+      originalAmount: 80,
+      kind: 'expense'
+    }), false, 'unrelated substring still needs its own rule');
+  } finally {
+    if (prev === undefined) delete process.env.EXCLUDE_RULES_CONFIG;
+    else process.env.EXCLUDE_RULES_CONFIG = prev;
+    unlinkSync(path);
+  }
+});
+
+test('exclude-apply --dry-run lists the matching rule and does not write', () => {
+  const path = './test-exclude-rules-dry-run.json';
+  const dbPath = './test-exclude-dry-run.sqlite';
+  writeFileSync(path, JSON.stringify([
+    { pattern: 'bankx', description: 'own-account top-up', direction: 'in' }
+  ]));
+  const prev = process.env.EXCLUDE_RULES_CONFIG;
+  process.env.EXCLUDE_RULES_CONFIG = path;
+  const db = new DB(dbPath);
+  try {
+    insertTx(db, { id: 'in1', chfAmount: -80, merchant: 'BankX', source: 'revolut' });
+    insertTx(db, { id: 'out1', chfAmount: 40, merchant: 'Shop BankX Ltd', source: 'revolut', fileRowIndex: 1 });
+
+    const hits = listExcludeHits(db, '2024-11');
+    assert.strictEqual(hits.length, 1);
+    assert.strictEqual(hits[0].id, 'in1');
+    assert.strictEqual(hits[0].reason, 'rule:own-account top-up');
+    assert.strictEqual(hits[0].alreadyExcluded, false);
+    assert.match(formatExcludeHit(hits[0]), /in1\s+BankX\s+rule:own-account top-up/);
+
+    assert.strictEqual(db.getTransaction('in1')?.excluded, false);
+    assert.strictEqual(db.getTransaction('out1')?.excluded, false);
+    assert.strictEqual(db.getMonthTotal('2024-11'), -40);
+  } finally {
+    if (prev === undefined) delete process.env.EXCLUDE_RULES_CONFIG;
+    else process.env.EXCLUDE_RULES_CONFIG = prev;
+    db.close();
+    unlinkSync(dbPath);
+    unlinkSync(path);
   }
 });
 
