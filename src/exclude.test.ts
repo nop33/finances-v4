@@ -143,39 +143,38 @@ test('exclude and include toggle a single row', () => {
   }
 });
 
-test('exclude source, direction, and exact match do not drop a third-party bankx out', () => {
+test('sending-bank exact out rule excludes a Revolut top-up source, not a third-party name', () => {
   const path = './test-exclude-rules-scope.json';
   writeFileSync(path, JSON.stringify([
-    { pattern: 'bankx', source: 'revolut', direction: 'in' },
-    { pattern: 'bankx', match: 'exact' }
+    { pattern: 'revolut', source: 'neon', direction: 'out', match: 'exact', description: 'own-account top-up' }
   ]));
   const prev = process.env.EXCLUDE_RULES_CONFIG;
   process.env.EXCLUDE_RULES_CONFIG = path;
   try {
     assert.strictEqual(shouldExclude({
-      merchant: 'bankx',
-      source: 'revolut',
-      originalAmount: -80,
-      kind: 'expense'
-    }), true, 'incoming own-account bankx');
-    assert.strictEqual(shouldExclude({
-      merchant: 'Shop BankX Ltd',
-      source: 'revolut',
-      originalAmount: 40,
-      kind: 'expense'
-    }), false, 'outgoing third party containing bankx');
-    assert.strictEqual(shouldExclude({
-      merchant: 'bankx',
-      source: 'neon',
-      originalAmount: 25,
-      kind: 'expense'
-    }), true, 'exact merchant bankx');
-    assert.strictEqual(shouldExclude({
-      merchant: 'Broker-XYZ Transfer',
+      merchant: 'revolut',
       source: 'neon',
       originalAmount: 80,
       kind: 'expense'
-    }), false, 'unrelated substring still needs its own rule');
+    }), true, 'outgoing neon to exact merchant revolut');
+    assert.strictEqual(shouldExclude({
+      merchant: 'Revolut Shop',
+      source: 'neon',
+      originalAmount: 40,
+      kind: 'expense'
+    }), false, 'third-party name containing revolut');
+    assert.strictEqual(shouldExclude({
+      merchant: 'Top-up from debit card',
+      source: 'revolut',
+      originalAmount: -80,
+      kind: 'top-up'
+    }), true, 'receiving Revolut top-up is already excluded by kind');
+    assert.strictEqual(shouldExclude({
+      merchant: 'revolut',
+      source: 'revolut',
+      originalAmount: -80,
+      kind: 'expense'
+    }), false, 'receiving side is not this sending-bank rule');
   } finally {
     if (prev === undefined) delete process.env.EXCLUDE_RULES_CONFIG;
     else process.env.EXCLUDE_RULES_CONFIG = prev;
@@ -183,29 +182,35 @@ test('exclude source, direction, and exact match do not drop a third-party bankx
   }
 });
 
-test('exclude-apply --dry-run lists the matching rule and does not write', () => {
+test('exclude-apply --dry-run lists every matching reason and does not write', () => {
   const path = './test-exclude-rules-dry-run.json';
   const dbPath = './test-exclude-dry-run.sqlite';
   writeFileSync(path, JSON.stringify([
-    { pattern: 'bankx', description: 'own-account top-up', direction: 'in' }
+    { pattern: 'revolut', source: 'neon', direction: 'out', match: 'exact', description: 'own-account top-up' },
+    { pattern: 'savings', description: 'own pocket' }
   ]));
   const prev = process.env.EXCLUDE_RULES_CONFIG;
   process.env.EXCLUDE_RULES_CONFIG = path;
   const db = new DB(dbPath);
   try {
-    insertTx(db, { id: 'in1', chfAmount: -80, merchant: 'BankX', source: 'revolut' });
-    insertTx(db, { id: 'out1', chfAmount: 40, merchant: 'Shop BankX Ltd', source: 'revolut', fileRowIndex: 1 });
+    insertTx(db, { id: 'out1', chfAmount: 80, merchant: 'revolut', source: 'neon' });
+    insertTx(db, { id: 'own1', chfAmount: 50, merchant: 'To savings space', source: 'revolut', kind: 'transfer', fileRowIndex: 1 });
+    insertTx(db, { id: 'shop1', chfAmount: 12, merchant: 'Revolut Shop', source: 'neon', fileRowIndex: 2 });
 
     const hits = listExcludeHits(db, '2024-11');
-    assert.strictEqual(hits.length, 1);
-    assert.strictEqual(hits[0].id, 'in1');
-    assert.strictEqual(hits[0].reason, 'rule:own-account top-up');
-    assert.strictEqual(hits[0].alreadyExcluded, false);
-    assert.match(formatExcludeHit(hits[0]), /in1\s+BankX\s+rule:own-account top-up/);
+    assert.strictEqual(hits.length, 2);
+    const sending = hits.find(h => h.id === 'out1');
+    const own = hits.find(h => h.id === 'own1');
+    assert.ok(sending);
+    assert.ok(own);
+    assert.deepStrictEqual(sending.reasons, ['rule:own-account top-up']);
+    assert.deepStrictEqual(own.reasons, ['kind:transfer', 'rule:own pocket']);
+    assert.match(formatExcludeHit(own), /own1\s+To savings space\s+kind:transfer, rule:own pocket/);
+    assert.strictEqual(sending.alreadyExcluded, false);
 
-    assert.strictEqual(db.getTransaction('in1')?.excluded, false);
     assert.strictEqual(db.getTransaction('out1')?.excluded, false);
-    assert.strictEqual(db.getMonthTotal('2024-11'), -40);
+    assert.strictEqual(db.getTransaction('own1')?.excluded, false);
+    assert.strictEqual(db.getTransaction('shop1')?.excluded, false);
   } finally {
     if (prev === undefined) delete process.env.EXCLUDE_RULES_CONFIG;
     else process.env.EXCLUDE_RULES_CONFIG = prev;

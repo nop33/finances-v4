@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { parseRevolutCsv } from './revolut.js';
+import { writeFileSync, unlinkSync } from 'fs';
+import { parseRevolutCsv, OUTGOING_PERSON_TRANSFER } from './revolut.js';
 
 describe('Revolut parser', () => {
   it('should parse Revolut CSV correctly', () => {
@@ -73,22 +74,65 @@ Card Refund,Current,2024-10-17 11:00:00,2024-10-17 11:00:05,MIGROS Refund,20.00,
   });
 
   it('classifies Topup, Transfer, and Exchange regardless of case', () => {
-    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+    const path = './test-own-accounts-case.json';
+    writeFileSync(path, JSON.stringify(['savings space']));
+    const prev = process.env.OWN_ACCOUNTS_CONFIG;
+    process.env.OWN_ACCOUNTS_CONFIG = path;
+    try {
+      const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
 Topup,Current,2024-10-15 09:00:00,2024-10-15 09:00:05,Top-up from debit card,100.00,0,CHF,COMPLETED,1100.00
 TRANSFER,Current,2024-10-16 09:00:00,2024-10-16 09:00:15,To savings space,-50.00,0,CHF,COMPLETED,1050.00
 exchange,Current,2024-10-17 09:00:00,2024-10-17 09:00:15,Exchanged to EUR,-100.00,2.00,EUR,COMPLETED,950.00
 Card Payment,Current,2024-10-18 10:30:00,2024-10-18 10:30:05,MIGROS,-10.00,0,CHF,COMPLETED,940.00`;
 
-    const transactions = parseRevolutCsv(csv);
+      const transactions = parseRevolutCsv(csv);
 
-    assert.strictEqual(transactions.length, 5);
-    assert.strictEqual(transactions[0].kind, 'top-up');
+      assert.strictEqual(transactions.length, 5);
+      assert.strictEqual(transactions[0].kind, 'top-up');
+      assert.strictEqual(transactions[1].kind, 'transfer');
+      assert.strictEqual(transactions[2].kind, 'exchange');
+      assert.strictEqual(transactions[2].originalAmount, 100);
+      assert.strictEqual(transactions[3].merchant, 'Exchanged to EUR fee');
+      assert.strictEqual(transactions[3].originalAmount, 2);
+      assert.strictEqual(transactions[4].kind, 'expense');
+    } finally {
+      if (prev === undefined) delete process.env.OWN_ACCOUNTS_CONFIG;
+      else process.env.OWN_ACCOUNTS_CONFIG = prev;
+      unlinkSync(path);
+    }
+  });
+
+  it('does not treat a Revolut transfer as own-account without a matching configured name', () => {
+    const path = './test-own-accounts-empty.json';
+    writeFileSync(path, JSON.stringify([]));
+    const prev = process.env.OWN_ACCOUNTS_CONFIG;
+    process.env.OWN_ACCOUNTS_CONFIG = path;
+    try {
+      const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Transfer,Current,2024-10-16 09:00:00,2024-10-16 09:00:15,To savings space,-50.00,0,CHF,COMPLETED,1050.00`;
+
+      const transactions = parseRevolutCsv(csv);
+      assert.strictEqual(transactions[0].kind, 'expense');
+      assert.strictEqual(transactions[0].explanation, OUTGOING_PERSON_TRANSFER);
+    } finally {
+      if (prev === undefined) delete process.env.OWN_ACCOUNTS_CONFIG;
+      else process.env.OWN_ACCOUNTS_CONFIG = prev;
+      unlinkSync(path);
+    }
+  });
+
+  it('treats an outgoing Revolut transfer to a person as an expense', () => {
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Transfer,Current,2024-10-16 09:00:00,2024-10-16 09:00:15,Alex Friend,-35.00,0,CHF,COMPLETED,965.00
+Transfer,Current,2024-10-17 09:00:00,2024-10-17 09:00:15,Alex Friend,20.00,0,CHF,COMPLETED,985.00`;
+
+    const transactions = parseRevolutCsv(csv);
+    assert.strictEqual(transactions[0].kind, 'expense');
+    assert.strictEqual(transactions[0].originalAmount, 35);
+    assert.strictEqual(transactions[0].explanation, OUTGOING_PERSON_TRANSFER);
     assert.strictEqual(transactions[1].kind, 'transfer');
-    assert.strictEqual(transactions[2].kind, 'exchange');
-    assert.strictEqual(transactions[2].originalAmount, 100);
-    assert.strictEqual(transactions[3].merchant, 'Exchanged to EUR fee');
-    assert.strictEqual(transactions[3].originalAmount, 2);
-    assert.strictEqual(transactions[4].kind, 'expense');
+    assert.strictEqual(transactions[1].originalAmount, -20);
+    assert.ok(!transactions[1].explanation);
   });
 
   it('should repair double-encoded UTF-8 (mojibake)', () => {

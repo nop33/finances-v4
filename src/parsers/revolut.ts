@@ -2,6 +2,9 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { ParsedTransaction } from '../types.js';
 import { normalizeAmount, repairMojibake } from './utils.js';
+import { isOwnAccountMerchant } from '../own-accounts.js';
+
+export const OUTGOING_PERSON_TRANSFER = 'outgoing transfer to a person';
 
 export function parseRevolutCsv(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, { header: true, skipEmptyLines: true });
@@ -46,7 +49,14 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
     if (typeKey === 'topup') {
       kind = 'top-up';
     } else if (typeKey === 'transfer') {
-      kind = 'transfer';
+      if (isOwnAccountMerchant(merchant)) {
+        kind = 'transfer';
+      } else if (originalAmount > 0) {
+        kind = 'expense';
+      } else {
+        // Incoming person-to-person: keep as transfer (auto-excluded).
+        kind = 'transfer';
+      }
     } else if (typeKey === 'exchange') {
       kind = 'exchange';
     }
@@ -61,6 +71,7 @@ function processRevolutRows(rows: any[]): ParsedTransaction[] {
       source: 'revolut',
       fileRowIndex: index,
       kind,
+      explanation: typeKey === 'transfer' && kind === 'expense' ? OUTGOING_PERSON_TRANSFER : undefined,
     });
 
     if (fee !== 0) {

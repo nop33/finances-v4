@@ -31,7 +31,7 @@ function printUsage() {
   finances split <txId> <category>=<chf> [...]  Split one charge across categories
   finances exclude-apply --month YYYY-MM [--dry-run]
                                                 Apply exclude-rules to a month
-                                                --dry-run prints which rule matches each row
+                                                --dry-run prints every matching kind and rule
   finances exclude <txId>                       Exclude a transaction from totals
   finances include <txId>                       Include a transaction in totals
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
