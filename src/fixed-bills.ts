@@ -12,6 +12,7 @@ export interface FixedBill {
   activeFrom?: string;
   activeUntil?: string;
   coverAnyAmount?: boolean;
+  shareOf?: boolean;
 }
 
 interface FixedBillsConfig {
@@ -95,6 +96,10 @@ function validateFixedBills(bills: FixedBill[]): void {
     if (bill.coverAnyAmount !== undefined && typeof bill.coverAnyAmount !== 'boolean') {
       throw new Error(`Bill ${bill.id} has invalid coverAnyAmount: must be a boolean`);
     }
+
+    if (bill.shareOf !== undefined && typeof bill.shareOf !== 'boolean') {
+      throw new Error(`Bill ${bill.id} has invalid shareOf: must be a boolean`);
+    }
   }
 }
 
@@ -126,7 +131,7 @@ export function getExpectedChargeAmount(bill: FixedBill): number {
   return bill.monthlyAmount * billPeriodMonths(bill);
 }
 
-// True when |amount - expected| / expected <= 10%. Off-band matches cover only if coverAnyAmount is set.
+// True when |amount - expected| / expected <= 10%. Off-band matches cover only if coverAnyAmount or shareOf is set.
 export function amountsMatchBill(chfAmount: number, expectedAmount: number): boolean {
   if (expectedAmount === 0) return chfAmount === 0;
   const diffCents = Math.abs(Math.round(chfAmount * 100) - Math.round(expectedAmount * 100));

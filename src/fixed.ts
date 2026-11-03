@@ -124,13 +124,13 @@ function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth
     };
   }
 
-  if (patternMatches.length > 0 && bill.coverAnyAmount) {
+  if (patternMatches.length > 0 && (bill.coverAnyAmount || bill.shareOf)) {
     const cover = closestCharge(patternMatches, expectedAmount);
     return {
       cover,
       flagUncovered: [],
       missing: false,
-      changed: true
+      changed: !bill.shareOf
     };
   }
 

@@ -76,6 +76,25 @@ test('loadFixedBills validates renewalMonth range', () => {
   }
 });
 
+test('loadFixedBills validates shareOf is a boolean', () => {
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  const invalidConfig = './test-invalid-share-of.json';
+  writeFileSync(invalidConfig, JSON.stringify({
+    bills: [{
+      id: 'test',
+      label: 'Test',
+      category: 'Living/Rent',
+      monthlyAmount: 10,
+      shareOf: 'yes'
+    }]
+  }));
+  try {
+    assert.throws(() => loadFixedBills(invalidConfig), /invalid shareOf/);
+  } finally {
+    unlinkSync(invalidConfig);
+  }
+});
+
 test('isBillActive returns true for bills without date constraints', () => {
   const bill: FixedBill = {
     id: 'test',
