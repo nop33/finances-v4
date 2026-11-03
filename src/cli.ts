@@ -4,7 +4,7 @@ import { DB } from './db.js';
 import { parseFile } from './parsers/index.js';
 import { importTransactions, formatImportStats } from './import.js';
 import { categorizeMonth, correctTransaction } from './categorize.js';
-import { applyFixedBills } from './fixed.js';
+import { applyFixedBills, unlinkFixedCharge, relinkFixedCharge } from './fixed.js';
 import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
 import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
 import { applyExcludeRules, setTransactionExcluded } from './exclude.js';
@@ -33,6 +33,8 @@ function printUsage() {
   finances exclude <txId>                       Exclude a transaction from totals
   finances include <txId>                       Include a transaction in totals
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
+  finances fixed unlink <txId>                  Never treat this charge as a bill payment
+  finances fixed relink <txId>                  Allow fixed apply to cover this charge again
   finances total --month YYYY-MM                Show month total (excludes covered charges)
   finances ledger --month YYYY-MM --out file.csv
                                                 Write counted transactions as CSV
@@ -272,6 +274,24 @@ try {
     console.log(`Applying fixed bills for ${month}...`);
     applyFixedBills(db, month);
     console.log(`Fixed bills applied successfully`);
+  } else if (command === 'fixed' && (args[1] === 'unlink' || args[1] === 'relink')) {
+    const txId = args[2];
+    if (!txId) {
+      console.error(`Error: Usage: finances fixed ${args[1]} <txId>`);
+      process.exit(1);
+    }
+    try {
+      if (args[1] === 'unlink') {
+        unlinkFixedCharge(db, txId);
+        console.log(`Unlinked ${txId} from fixed-bill coverage`);
+      } else {
+        relinkFixedCharge(db, txId);
+        console.log(`Relinked ${txId} for fixed-bill coverage`);
+      }
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
   } else if (command === 'total') {
     const monthIndex = args.indexOf('--month');
     if (monthIndex === -1 || !args[monthIndex + 1]) {

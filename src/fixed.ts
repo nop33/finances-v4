@@ -26,6 +26,25 @@ function clearMonthCoverage(db: DB, yearMonth: string): void {
   }
 }
 
+export function unlinkFixedCharge(db: DB, txId: string): void {
+  const tx = db.getTransaction(txId);
+  if (!tx) {
+    throw new Error(`Transaction ${txId} not found`);
+  }
+  db.setFixedOverride(txId, 'unlink');
+  if (tx.coveredByFixedBill || tx.fixedChanged) {
+    db.clearFixedCoverage(txId);
+  }
+}
+
+export function relinkFixedCharge(db: DB, txId: string): void {
+  const tx = db.getTransaction(txId);
+  if (!tx) {
+    throw new Error(`Transaction ${txId} not found`);
+  }
+  db.setFixedOverride(txId, 'relink');
+}
+
 export function applyFixedBills(db: DB, yearMonth: string): void {
   const bills = loadFixedBills();
   const activeBills = bills.filter(bill => isBillActive(bill, yearMonth));
@@ -87,7 +106,9 @@ function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth
   const isDue = isBillDue(bill, yearMonth);
   const expectedAmount = getExpectedChargeAmount(bill);
   const patternMatches = allTransactions.filter(tx =>
-    tx.source !== 'fixed' && matchesBillPattern(tx.merchant, bill)
+    tx.source !== 'fixed' &&
+    tx.fixedOverride !== 'unlink' &&
+    matchesBillPattern(tx.merchant, bill)
   );
   const inBand = patternMatches.filter(tx => amountsMatchBill(tx.chfAmount, expectedAmount));
 

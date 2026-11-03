@@ -28,6 +28,7 @@ export interface Transaction {
   kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
   excluded?: boolean;
   excludeOverride?: 'include' | 'exclude';
+  fixedOverride?: 'unlink' | 'relink';
   splits?: TransactionSplit[];
 }
 

@@ -105,6 +105,7 @@ node dist/cli.js summary --month 2024-10
 - **categorise --month YYYY-MM**: Auto-categorise all unreviewed transactions for the specified month
 - **list --month YYYY-MM**: List all transactions for the specified month
 - **correct <txId> <category>**: Manually correct a transaction's category, teaching merchant memory for future similar transactions
+- **fixed unlink <txId>** / **fixed relink <txId>**: Mark a bank charge as not a bill payment, or allow `fixed apply` to cover it again. Stored as `fixed_override` like `exclude_override`.
 - **ledger --month YYYY-MM --out file.csv**: Counted (non-excluded, not covered-by-bill) transactions as CSV. Splits become one row per part. Columns: date, source, merchant, amount, category, splitwise_adjustment, reviewed. Sorted by date then id. A bank charge whose merchant tokens overlap a Splitwise row within ±31 days, with `|share| <= charge`, gets that share in `splitwise_adjustment` (each Splitwise row links at most once). Linking is display-only and does not change totals. Displayed amounts use largest-remainder rounding so they sum to the month total.
 - **expences-row --month YYYY-MM --out file.json**: One monthly Expences row from `CATEGORY_CONFIG` leaf columns (letters C–CL). JSON `{month, cells, unmapped, total, cellsSum}`. Every mapped column is present (0 if no spend). Categories with spend but no column are listed in `unmapped`. Cell and unmapped amounts use largest-remainder rounding so they sum to the month total. Formula columns are not written.
 - **summary --month YYYY-MM**: Total, top 5 categories, flagged row count (`fixedChanged`, `fixedMissing`, confidence below 0.7, new merchant) with a per-flag breakdown. Excluded rows and covered bank charges are skipped; missing confidence is not treated as low. Reviewed or corrected rows are never flagged for new merchant or low confidence. `fixedChanged` / `fixedMissing` count until the row is reviewed. Month-over-month delta when some bank import covers most of the previous month: that import was passed `--month` for it, or it has bank rows on at least 5 distinct dates in it. A few statement spill-over dates (e.g. 09-30 rows inside an October file) do not count. Otherwise prints `previous month not loaded`.
@@ -130,6 +131,7 @@ node dist/cli.js summary --month 2024-10
 - `explanation`: human-readable explanation of categorisation decision
 - `categorization_source`: merchant_memory, rule, or unknown
 - `reviewed`: 1 if the user has reviewed/corrected this transaction
+- `fixed_override`: `unlink` if this charge must never cover a bill; `relink` to allow coverage again
 - `new_merchant`: 1 if this merchant was never seen before
 - `unusual_amount`: 1 if amount is >2σ from this merchant's history
 - `possible_duplicate`: 1 if same merchant+amount within 7 days (excluding same-day)
@@ -211,6 +213,8 @@ Coverage needs a merchant pattern match **and** an amount within 10% of the expe
 A match outside that 10% band is treated as a possible extra purchase from the same merchant. It still counts and is flagged `fixedChanged` for review (possible price change). The synthetic bill still counts and, in a month the bill is due, is flagged `fixedMissing` so the review UI can show that the annual/monthly charge was not seen. Nothing is dropped or double-counted by covering the extra.
 
 Set `"coverAnyAmount": true` on a bill when a charge of any amount should cover it, for example rent paid in full and later partly repaid. That flag applies to one match or many. With several off-band matches it covers the closest.
+
+`fixed unlink <txId>` stores `fixed_override=unlink` so a matching charge never covers a bill. `fixed relink <txId>` clears that so the next apply can cover it again.
 
 ```json
 {
