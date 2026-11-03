@@ -608,3 +608,92 @@ Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,
     unlinkSync(dbPath);
   }
 });
+
+test('converted fee without category is left unreviewed', async () => {
+  const dbPath = './test-import-revolut-fee-unreviewed.sqlite';
+  const db = new DB(dbPath);
+  const prev = process.env.REVOLUT_FEE_CATEGORY;
+  delete process.env.REVOLUT_FEE_CATEGORY;
+  const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1000.00`;
+  try {
+    const folded: ParsedTransaction = {
+      date: '2024-10-15',
+      merchant: 'MIGROS',
+      description: 'Card Payment',
+      originalAmount: 19,
+      originalCurrency: 'CHF',
+      source: 'revolut',
+      fileRowIndex: 0,
+      kind: 'expense',
+    };
+    await importTransactions(db, [folded]);
+    const old = db.getTransactionsByMonth('2024-10')[0];
+    db.updateTransactionCategorization(old.id, 'Shopping', 1, 'manual', 'rule', {
+      newMerchant: false,
+      unusualAmount: false,
+      possibleDuplicate: false,
+      unconvertedFx: false,
+    });
+    db.markAsReviewed(old.id);
+
+    await importTransactions(db, parseRevolutCsv(csv));
+    const charge = db.getTransactionsByMonth('2024-10').find(t => t.merchant === 'MIGROS');
+    const fee = db.getTransactionsByMonth('2024-10').find(t => t.merchant === 'MIGROS fee');
+    assert.ok(charge);
+    assert.ok(fee);
+    assert.strictEqual(charge.reviewed, true);
+    assert.strictEqual(charge.category, 'Shopping');
+    assert.ok(!fee.category);
+    assert.strictEqual(fee.reviewed, false);
+  } finally {
+    if (prev === undefined) delete process.env.REVOLUT_FEE_CATEGORY;
+    else process.env.REVOLUT_FEE_CATEGORY = prev;
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
+
+test('only a unique fee-sized split is treated as the fee', async () => {
+  const dbPath = './test-import-revolut-fee-unique-split.sqlite';
+  const db = new DB(dbPath);
+  const prev = process.env.REVOLUT_FEE_CATEGORY;
+  delete process.env.REVOLUT_FEE_CATEGORY;
+  const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1000.00`;
+  try {
+    const folded: ParsedTransaction = {
+      date: '2024-10-15',
+      merchant: 'MIGROS',
+      description: 'Card Payment',
+      originalAmount: 19,
+      originalCurrency: 'CHF',
+      source: 'revolut',
+      fileRowIndex: 0,
+      kind: 'expense',
+    };
+    await importTransactions(db, [folded]);
+    const old = db.getTransactionsByMonth('2024-10')[0];
+    db.markAsReviewed(old.id);
+    db.setSplits(old.id, [
+      { category: 'Shopping', chfAmount: 0.60 },
+      { category: 'Tech/Phone', chfAmount: 0.60 },
+      { category: 'Meals', chfAmount: 17.80 },
+    ]);
+
+    await importTransactions(db, parseRevolutCsv(csv));
+    const charge = db.getTransactionsByMonth('2024-10').find(t => t.merchant === 'MIGROS');
+    const fee = db.getTransactionsByMonth('2024-10').find(t => t.merchant === 'MIGROS fee');
+    assert.ok(charge);
+    assert.ok(fee);
+    assert.ok(charge.splits);
+    assert.strictEqual(charge.splits.length, 3);
+    assert.ok(!fee.category);
+    assert.strictEqual(fee.reviewed, false);
+  } finally {
+    if (prev === undefined) delete process.env.REVOLUT_FEE_CATEGORY;
+    else process.env.REVOLUT_FEE_CATEGORY = prev;
+    db.close();
+    unlinkSync(dbPath);
+  }
+});
