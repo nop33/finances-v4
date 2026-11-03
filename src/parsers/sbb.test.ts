@@ -270,14 +270,14 @@ ZVV Day Pass (calendar day)`;
       
       // First import
       const first = await importTransactions(db, parsed);
-      assert.deepStrictEqual(first, { new: 1, unchanged: 0 });
+      assert.deepStrictEqual(first, { new: 1, unchanged: 0, converted: 0, feeRows: 0 });
       let allTxs = db.getTransactionsByMonth('2025-02');
       assert.strictEqual(allTxs.length, 1);
       const firstId = allTxs[0].id;
 
       // Re-import same receipt
       const second = await importTransactions(db, parsed);
-      assert.deepStrictEqual(second, { new: 0, unchanged: 1 });
+      assert.deepStrictEqual(second, { new: 0, unchanged: 1, converted: 0, feeRows: 0 });
       allTxs = db.getTransactionsByMonth('2025-02');
       
       // Should still be 1 transaction (updated, not duplicated)
