@@ -144,6 +144,37 @@ test('applyFixedBills deletes a synthetic row when the bill is no longer active'
   }
 });
 
+test('applyFixedBills uncovers a charge when coverAnyAmount is turned off', () => {
+  withBills('./test-fixed-recompute-cover.sqlite', [{
+    id: 'tools',
+    label: 'Tools',
+    category: 'Tech/Phone',
+    monthlyAmount: 10,
+    merchantPatterns: ['tool'],
+    coverAnyAmount: true
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Tool shop', 50));
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getTransaction('bank1')?.coveredByFixedBill, 'Tools');
+    assert.strictEqual(db.getMonthTotal('2024-10'), 10);
+
+    writeFileSync('./test-fixed-recompute-cover-bills.json', JSON.stringify({
+      bills: [{
+        id: 'tools',
+        label: 'Tools',
+        category: 'Tech/Phone',
+        monthlyAmount: 10,
+        merchantPatterns: ['tool']
+      }]
+    }));
+    applyFixedBills(db, '2024-10');
+    const bank = db.getTransaction('bank1');
+    assert.strictEqual(bank?.coveredByFixedBill, null);
+    assert.strictEqual(bank?.fixedChanged, true);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 60);
+  });
+});
+
 test('applyFixedBills is idempotent', () => {
   const dbPath = './test-fixed-idempotent.sqlite';
   const db = new DB(dbPath);

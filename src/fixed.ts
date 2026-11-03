@@ -17,10 +17,20 @@ function closestCharge(txs: Transaction[], expected: number): Transaction {
   );
 }
 
+function clearMonthCoverage(db: DB, yearMonth: string): void {
+  for (const tx of db.getTransactionsByMonth(yearMonth)) {
+    if (tx.source === 'fixed') continue;
+    if (tx.coveredByFixedBill || tx.fixedChanged) {
+      db.clearFixedCoverage(tx.id);
+    }
+  }
+}
+
 export function applyFixedBills(db: DB, yearMonth: string): void {
   const bills = loadFixedBills();
   const activeBills = bills.filter(bill => isBillActive(bill, yearMonth));
 
+  clearMonthCoverage(db, yearMonth);
   const allTransactions = db.getTransactionsByMonth(yearMonth);
 
   for (const bill of activeBills) {

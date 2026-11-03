@@ -204,7 +204,7 @@ Set environment variables to override defaults:
 
 ## Fixed bills
 
-`finances fixed apply --month YYYY-MM` inserts one synthetic row per bill (the listed `monthlyAmount`) and may mark a bank charge as covered so it does not also count. Re-applying deletes a synthetic row whose bill was removed from the config or is no longer active for that month.
+`finances fixed apply --month YYYY-MM` inserts one synthetic row per bill (the listed `monthlyAmount`) and may mark a bank charge as covered so it does not also count. Re-applying deletes a synthetic row whose bill was removed from the config or is no longer active for that month. Coverage is recomputed each run: a charge that no longer matches (for example `coverAnyAmount` turned off) is unmarked and counts on its own again.
 
 Coverage needs a merchant pattern match **and** an amount within 10% of the expected charge (`monthlyAmount`, or `monthlyAmount * 12` in `renewalMonth`). Among several in-band matches, the closest amount wins. Other pattern matches stay as normal expenses.
 
