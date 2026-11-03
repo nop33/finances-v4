@@ -2,7 +2,7 @@ import { describe, it, before, after, test } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
 import { DB } from './db.js';
-import { importTransactions } from './import.js';
+import { importTransactions, formatImportStats } from './import.js';
 import { ParsedTransaction, Transaction } from './types.js';
 import { parseRevolutCsv } from './parsers/revolut.js';
 import { importTransactionId } from './parsers/utils.js';
@@ -72,12 +72,12 @@ describe('Import module', () => {
     ];
 
     const first = await importTransactions(db, parsed);
-    assert.deepStrictEqual(first, { new: 1, unchanged: 0 });
+    assert.deepStrictEqual(first, { new: 1, unchanged: 0, converted: 0, feeRows: 0 });
     const firstImport = db.getTransactionsByMonth('2024-10');
     const initialCount = firstImport.length;
 
     const second = await importTransactions(db, parsed);
-    assert.deepStrictEqual(second, { new: 0, unchanged: 1 });
+    assert.deepStrictEqual(second, { new: 0, unchanged: 1, converted: 0, feeRows: 0 });
     const secondImport = db.getTransactionsByMonth('2024-10');
 
     assert.strictEqual(secondImport.length, initialCount);
@@ -451,6 +451,13 @@ test('import records file coverage and distinct bank dates', async () => {
   }
 });
 
+test('formatImportStats includes converted and fee rows', () => {
+  assert.strictEqual(
+    formatImportStats({ new: 0, unchanged: 50, converted: 10, feeRows: 10 }),
+    '0 new, 50 unchanged, 10 converted, 10 fee rows'
+  );
+});
+
 test('Revolut fee rows keep stable ids across re-import', async () => {
   const dbPath = './test-import-revolut-fee.sqlite';
   const db = new DB(dbPath);
@@ -460,7 +467,7 @@ test('Revolut fee rows keep stable ids across re-import', async () => {
 Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1000.00`;
   try {
     const first = await importTransactions(db, parseRevolutCsv(csv));
-    assert.deepStrictEqual(first, { new: 2, unchanged: 0 });
+    assert.deepStrictEqual(first, { new: 2, unchanged: 0, converted: 0, feeRows: 0 });
     const afterFirst = db.getTransactionsByMonth('2024-10');
     const charge = afterFirst.find(t => t.merchant === 'MIGROS');
     const fee = afterFirst.find(t => t.merchant === 'MIGROS fee');
@@ -474,7 +481,7 @@ Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,
     assert.notStrictEqual(chargeId, feeId);
 
     const second = await importTransactions(db, parseRevolutCsv(csv));
-    assert.deepStrictEqual(second, { new: 0, unchanged: 2 });
+    assert.deepStrictEqual(second, { new: 0, unchanged: 2, converted: 0, feeRows: 0 });
     const afterSecond = db.getTransactionsByMonth('2024-10');
     assert.strictEqual(afterSecond.length, 2);
     assert.strictEqual(afterSecond.find(t => t.merchant === 'MIGROS')?.id, chargeId);
@@ -516,7 +523,7 @@ Card Payment,Current,2024-10-01 09:00:00,2024-10-01 09:00:05,COOP,-5.00,0,CHF,CO
 Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1081.00
 Card Payment,Current,2024-10-15 16:00:00,2024-10-15 16:00:05,MIGROS,-18.40,0.60,CHF,COMPLETED,1062.00`;
     const stats = await importTransactions(db, parseRevolutCsv(longer));
-    assert.deepStrictEqual(stats, { new: 1, unchanged: 4 });
+    assert.deepStrictEqual(stats, { new: 1, unchanged: 0, converted: 2, feeRows: 2 });
     assert.strictEqual(db.getMonthTotal('2024-10'), totalBefore + 5);
 
     const txs = db.getTransactionsByMonth('2024-10');
@@ -554,7 +561,7 @@ Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,
       kind: 'expense',
     };
     const seeded = await importTransactions(db, [folded]);
-    assert.deepStrictEqual(seeded, { new: 1, unchanged: 0 });
+    assert.deepStrictEqual(seeded, { new: 1, unchanged: 0, converted: 0, feeRows: 0 });
     const old = db.getTransactionsByMonth('2024-10')[0];
     assert.ok(old);
     assert.strictEqual(old.chfAmount, 19);
@@ -576,7 +583,7 @@ Card Payment,Current,2024-10-15 10:30:00,2024-10-15 10:30:05,MIGROS,-18.40,0.60,
     ]);
 
     const stats = await importTransactions(db, parseRevolutCsv(csv));
-    assert.deepStrictEqual(stats, { new: 0, unchanged: 2 });
+    assert.deepStrictEqual(stats, { new: 0, unchanged: 0, converted: 1, feeRows: 1 });
     assert.strictEqual(db.getMonthTotal('2024-10'), totalBefore);
 
     const txs = db.getTransactionsByMonth('2024-10');

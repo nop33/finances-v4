@@ -287,7 +287,9 @@ export class DB {
 
   // Turn a pre-split Revolut row (fee folded into the amount) into charge + fee.
   // Incoming rows already use the exclusive charge amount and a sibling Fee row.
-  migrateFoldedRevolutFees(incoming: Transaction[]): void {
+  migrateFoldedRevolutFees(incoming: Transaction[]): { convertedIds: string[]; feeIds: string[] } {
+    const convertedIds: string[] = [];
+    const feeIds: string[] = [];
     const apply = this.db.transaction(() => {
       this.db.pragma('defer_foreign_keys = ON');
       const claimedOldIds = new Set<string>();
@@ -362,9 +364,12 @@ export class DB {
           fixedMissing: false,
           splits: undefined
         });
+        convertedIds.push(charge.id);
+        feeIds.push(fee.id);
       }
     });
     apply();
+    return { convertedIds, feeIds };
   }
 
   insertTransaction(tx: Transaction): void {

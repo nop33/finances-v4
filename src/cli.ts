@@ -117,7 +117,7 @@ try {
       process.exit(1);
     }
 
-    const totals = { new: 0, unchanged: 0 };
+    const totals = { new: 0, unchanged: 0, converted: 0, feeRows: 0 };
     let skipped = 0;
 
     for (const file of files) {
@@ -129,6 +129,8 @@ try {
         console.log(`  ${formatImportStats(stats)}`);
         totals.new += stats.new;
         totals.unchanged += stats.unchanged;
+        totals.converted += stats.converted;
+        totals.feeRows += stats.feeRows;
       } catch (error) {
         console.error(`  Error: ${error instanceof Error ? error.message : String(error)}`);
         console.error(`  Skipping ${file}`);

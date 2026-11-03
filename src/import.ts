@@ -4,7 +4,7 @@ import { Transaction, ParsedTransaction } from './types.js';
 import { importTransactionId, repairMojibake } from './parsers/utils.js';
 import { loadExcludeRules, shouldExclude } from './exclude.js';
 
-export type ImportStats = { new: number; unchanged: number };
+export type ImportStats = { new: number; unchanged: number; converted: number; feeRows: number };
 
 export type ImportOptions = {
   file?: string;
@@ -12,7 +12,7 @@ export type ImportOptions = {
 };
 
 export function formatImportStats(stats: ImportStats): string {
-  return `${stats.new} new, ${stats.unchanged} unchanged`;
+  return `${stats.new} new, ${stats.unchanged} unchanged, ${stats.converted} converted, ${stats.feeRows} fee rows`;
 }
 
 export async function importTransactions(
@@ -81,11 +81,15 @@ export async function importTransactions(
     });
   }
 
-  db.migrateFoldedRevolutFees(transactions);
+  const migrated = db.migrateFoldedRevolutFees(transactions);
+  const convertedIds = new Set(migrated.convertedIds);
+  const feeIds = new Set(migrated.feeIds);
 
-  const stats: ImportStats = { new: 0, unchanged: 0 };
+  const stats: ImportStats = { new: 0, unchanged: 0, converted: 0, feeRows: 0 };
   for (const tx of transactions) {
-    if (db.getTransaction(tx.id)) stats.unchanged++;
+    if (convertedIds.has(tx.id)) stats.converted++;
+    else if (feeIds.has(tx.id)) stats.feeRows++;
+    else if (db.getTransaction(tx.id)) stats.unchanged++;
     else stats.new++;
   }
   db.insertTransactions(transactions);
