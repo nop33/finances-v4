@@ -215,6 +215,8 @@ A match outside that 10% band is treated as a possible extra purchase from the s
 
 Set `"coverAnyAmount": true` on a bill when a charge of any amount should cover it, for example rent paid in full and later partly repaid. That flag applies to one match or many. With several off-band matches it covers the closest.
 
+Set `"shareOf": true` when the bill is a share of a larger charge (a family plan: bill 10, card charge 60). A matching charge at least the bill amount is covered, the bill amount counts, and `fixedChanged` is not set. A smaller matching charge is not covered.
+
 `fixed unlink <txId>` stores `fixed_override=unlink` so a matching charge never covers a bill. `fixed relink <txId>` clears that so the next apply can cover it again.
 
 ```json
