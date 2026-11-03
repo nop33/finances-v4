@@ -359,6 +359,30 @@ test('shareOf covers a larger family-plan charge without fixedChanged', () => {
   });
 });
 
+test('shareOf does not cover a matching charge smaller than the bill', () => {
+  withBills('./test-fixed-share-of-small.sqlite', [{
+    id: 'phone',
+    label: 'Phone share',
+    category: 'Tech/Phone',
+    monthlyAmount: 10,
+    merchantPatterns: ['carrier'],
+    shareOf: true
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Carrier Family', 6));
+    applyFixedBills(db, '2024-10');
+
+    const bank = db.getTransaction('bank1');
+    const bill = db.getTransactionsByMonth('2024-10').find(t => t.id === 'fixed:phone:2024-10');
+    assert.ok(bank);
+    assert.ok(bill);
+    assert.strictEqual(bank.coveredByFixedBill, null);
+    assert.strictEqual(bank.fixedChanged, true);
+    assert.strictEqual(bill.fixedMissing, true);
+    assert.strictEqual(bill.fixedChanged, false);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 16);
+  });
+});
+
 test('coverAnyAmount covers a single off-band charge such as rent paid in full', () => {
   withBills('./test-fixed-cover-any-single.sqlite', [{
     id: 'rent',
