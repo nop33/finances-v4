@@ -83,6 +83,9 @@ export interface ExcludeRule {
   pattern: string;
   description?: string;
   kind?: 'expense' | 'transfer' | 'income' | 'card-payment' | 'top-up' | 'exchange';
+  source?: string;
+  direction?: 'in' | 'out';
+  match?: 'exact';
 }
 
 export interface TransactionSplit {

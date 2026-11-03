@@ -7,7 +7,7 @@ import { categorizeMonth, correctTransaction } from './categorize.js';
 import { applyFixedBills, unlinkFixedCharge, relinkFixedCharge } from './fixed.js';
 import { importSplitwiseExpenses, importSplitwiseCsvFiles } from './splitwise.js';
 import { parseSplitParts, splitTransaction, getCategoryTotals } from './split.js';
-import { applyExcludeRules, setTransactionExcluded } from './exclude.js';
+import { applyExcludeRules, formatExcludeHit, listExcludeHits, setTransactionExcluded } from './exclude.js';
 import { startServer } from './web-server.js';
 import { writeLedger, writeExpencesRow, buildSummary, formatSummary } from './output.js';
 import { mkdirSync } from 'fs';
@@ -29,7 +29,9 @@ function printUsage() {
   finances categorise --month YYYY-MM           Auto-categorise transactions for a month
   finances correct <txId> <category>            Correct a transaction's category
   finances split <txId> <category>=<chf> [...]  Split one charge across categories
-  finances exclude-apply --month YYYY-MM        Apply exclude-rules to a month
+  finances exclude-apply --month YYYY-MM [--dry-run]
+                                                Apply exclude-rules to a month
+                                                --dry-run prints which rule matches each row
   finances exclude <txId>                       Exclude a transaction from totals
   finances include <txId>                       Include a transaction in totals
   finances fixed apply --month YYYY-MM          Apply fixed bills for a month
@@ -232,20 +234,19 @@ try {
       process.exit(1);
     }
   } else if (command === 'exclude-apply') {
-    const monthIndex = args.indexOf('--month');
-    if (monthIndex === -1 || !args[monthIndex + 1]) {
-      console.error('Error: --month YYYY-MM required');
-      process.exit(1);
+    const month = requireMonth(args);
+    const dryRun = args.includes('--dry-run');
+    if (dryRun) {
+      const hits = listExcludeHits(db, month);
+      for (const hit of hits) {
+        console.log(formatExcludeHit(hit));
+      }
+      const would = hits.filter(hit => !hit.alreadyExcluded && !hit.includeOverride).length;
+      console.log(`Would exclude ${would} transaction(s) for ${month}`);
+    } else {
+      const applied = applyExcludeRules(db, month);
+      console.log(`Excluded ${applied} transaction(s) for ${month}`);
     }
-
-    const month = args[monthIndex + 1];
-    if (!/^\d{4}-\d{2}$/.test(month)) {
-      console.error('Error: Month must be in YYYY-MM format');
-      process.exit(1);
-    }
-
-    const applied = applyExcludeRules(db, month);
-    console.log(`Excluded ${applied} transaction(s) for ${month}`);
   } else if (command === 'exclude' || command === 'include') {
     const txId = args[1];
     if (!txId) {

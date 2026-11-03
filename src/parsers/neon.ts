@@ -1,21 +1,7 @@
 import Papa from 'papaparse';
-import { existsSync, readFileSync } from 'fs';
-import { ParsedTransaction, ExcludeRule } from '../types.js';
+import { ParsedTransaction } from '../types.js';
 import { normalizeAmount } from './utils.js';
-
-function loadTransferPatterns(): string[] {
-  const configPath = process.env.EXCLUDE_RULES_CONFIG || './.exclude-rules.json';
-  if (!existsSync(configPath)) return [];
-  try {
-    const data = JSON.parse(readFileSync(configPath, 'utf-8'));
-    const rules: ExcludeRule[] = Array.isArray(data) ? data : [];
-    return rules
-      .filter(rule => rule.kind === 'transfer' && rule.pattern)
-      .map(rule => rule.pattern.toLowerCase());
-  } catch {
-    return [];
-  }
-}
+import { loadExcludeRules, ruleMatches } from '../exclude.js';
 
 export function parseNeon(content: string): ParsedTransaction[] {
   const result = Papa.parse(content, {
@@ -25,7 +11,7 @@ export function parseNeon(content: string): ParsedTransaction[] {
   });
 
   const transactions: ParsedTransaction[] = [];
-  const transferPatterns = loadTransferPatterns();
+  const transferRules = loadExcludeRules().filter(rule => rule.kind === 'transfer');
 
   result.data.forEach((row: any, index: number) => {
     const date = row['Date'];
@@ -43,8 +29,7 @@ export function parseNeon(content: string): ParsedTransaction[] {
     let kind: ParsedTransaction['kind'] = 'expense';
     const merchantLower = merchant.toLowerCase();
     const descriptionLower = (description || '').toLowerCase();
-    const haystack = `${merchantLower} ${descriptionLower}`;
-    
+
     // Incoming money (positive in CSV, becomes negative in our convention)
     if (amount > 0) {
       kind = 'income';
@@ -54,8 +39,8 @@ export function parseNeon(content: string): ParsedTransaction[] {
         merchantLower.includes('transfer')) {
       kind = 'transfer';
     }
-    for (const pattern of transferPatterns) {
-      if (haystack.includes(pattern)) {
+    for (const rule of transferRules) {
+      if (ruleMatches(rule, { merchant, description, source: 'neon', originalAmount })) {
         kind = 'transfer';
         break;
       }

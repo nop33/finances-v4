@@ -17,5 +17,12 @@
   {
     "pattern": "salary",
     "description": "Income"
+  },
+  {
+    "pattern": "bankx",
+    "description": "Own-account top-up",
+    "source": "revolut",
+    "direction": "in",
+    "match": "exact"
   }
 ]
