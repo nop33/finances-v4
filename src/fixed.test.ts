@@ -73,6 +73,77 @@ test('applyFixedBills creates synthetic transactions for active bills', () => {
   }
 });
 
+test('applyFixedBills deletes a synthetic row when the bill is removed from config', () => {
+  const dbPath = './test-fixed-remove-stale.sqlite';
+  const configPath = './test-fixed-remove-stale-bills.json';
+  const billA: FixedBill = {
+    id: 'bill-a',
+    label: 'Bill A',
+    category: 'Living/Rent',
+    monthlyAmount: 80
+  };
+  const prevCat = process.env.CATEGORY_CONFIG;
+  const prevBills = process.env.FIXED_BILLS_CONFIG;
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  process.env.FIXED_BILLS_CONFIG = configPath;
+  writeFileSync(configPath, JSON.stringify({ bills: [billA] }));
+  const db = new DB(dbPath);
+  try {
+    applyFixedBills(db, '2024-10');
+    assert.ok(db.getTransaction('fixed:bill-a:2024-10'));
+    assert.strictEqual(db.getMonthTotal('2024-10'), 80);
+
+    writeFileSync(configPath, JSON.stringify({ bills: [] }));
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getTransaction('fixed:bill-a:2024-10'), undefined);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 0);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+    unlinkSync(configPath);
+    if (prevCat === undefined) delete process.env.CATEGORY_CONFIG;
+    else process.env.CATEGORY_CONFIG = prevCat;
+    if (prevBills === undefined) delete process.env.FIXED_BILLS_CONFIG;
+    else process.env.FIXED_BILLS_CONFIG = prevBills;
+  }
+});
+
+test('applyFixedBills deletes a synthetic row when the bill is no longer active', () => {
+  const dbPath = './test-fixed-disable-stale.sqlite';
+  const configPath = './test-fixed-disable-stale-bills.json';
+  const billA: FixedBill = {
+    id: 'bill-a',
+    label: 'Bill A',
+    category: 'Living/Rent',
+    monthlyAmount: 80
+  };
+  const prevCat = process.env.CATEGORY_CONFIG;
+  const prevBills = process.env.FIXED_BILLS_CONFIG;
+  process.env.CATEGORY_CONFIG = './dist/test-fixtures/test-categories-fixed.json';
+  process.env.FIXED_BILLS_CONFIG = configPath;
+  writeFileSync(configPath, JSON.stringify({ bills: [billA] }));
+  const db = new DB(dbPath);
+  try {
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getMonthTotal('2024-10'), 80);
+
+    writeFileSync(configPath, JSON.stringify({
+      bills: [{ ...billA, activeUntil: '2024-09' }]
+    }));
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getTransaction('fixed:bill-a:2024-10'), undefined);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 0);
+  } finally {
+    db.close();
+    unlinkSync(dbPath);
+    unlinkSync(configPath);
+    if (prevCat === undefined) delete process.env.CATEGORY_CONFIG;
+    else process.env.CATEGORY_CONFIG = prevCat;
+    if (prevBills === undefined) delete process.env.FIXED_BILLS_CONFIG;
+    else process.env.FIXED_BILLS_CONFIG = prevBills;
+  }
+});
+
 test('applyFixedBills is idempotent', () => {
   const dbPath = './test-fixed-idempotent.sqlite';
   const db = new DB(dbPath);
