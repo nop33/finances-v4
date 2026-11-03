@@ -59,7 +59,8 @@ export class DB {
         covered_by_fixed_bill TEXT,
         kind TEXT,
         excluded INTEGER DEFAULT 0,
-        exclude_override TEXT
+        exclude_override TEXT,
+        fixed_override TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
@@ -118,6 +119,7 @@ export class DB {
       );
     `);
     this.ensureColumn('transactions', 'exclude_override', 'TEXT');
+    this.ensureColumn('transactions', 'fixed_override', 'TEXT');
     this.migrateImportIds();
   }
 
@@ -304,8 +306,8 @@ export class DB {
           category, confidence, explanation, categorization_source, reviewed,
           new_merchant, unusual_amount, possible_duplicate, unconverted_fx,
           fixed_missing, fixed_changed, covered_by_fixed_bill, kind, excluded,
-          exclude_override
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          exclude_override, fixed_override
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insertStmt.run(
@@ -337,7 +339,8 @@ export class DB {
         tx.coveredByFixedBill || null,
         tx.kind || null,
         tx.excluded ? 1 : 0,
-        tx.excludeOverride || null
+        tx.excludeOverride || null,
+        tx.fixedOverride || null
       );
     }
   }
@@ -365,7 +368,8 @@ export class DB {
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
         covered_by_fixed_bill as coveredByFixedBill, kind, excluded,
-        exclude_override as excludeOverride
+        exclude_override as excludeOverride,
+        fixed_override as fixedOverride
       FROM transactions
       WHERE date LIKE ? || '%'
       ORDER BY date, file_row_index
@@ -405,7 +409,8 @@ export class DB {
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
         covered_by_fixed_bill as coveredByFixedBill, kind, excluded,
-        exclude_override as excludeOverride
+        exclude_override as excludeOverride,
+        fixed_override as fixedOverride
       FROM transactions
       WHERE id = ?
     `);
@@ -506,7 +511,8 @@ export class DB {
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
         covered_by_fixed_bill as coveredByFixedBill, kind, excluded,
-        exclude_override as excludeOverride
+        exclude_override as excludeOverride,
+        fixed_override as fixedOverride
       FROM transactions
       WHERE merchant = ?
       ORDER BY date DESC
@@ -529,7 +535,8 @@ export class DB {
         possible_duplicate as possibleDuplicate, unconverted_fx as unconvertedFx,
         fixed_missing as fixedMissing, fixed_changed as fixedChanged,
         covered_by_fixed_bill as coveredByFixedBill, kind, excluded,
-        exclude_override as excludeOverride
+        exclude_override as excludeOverride,
+        fixed_override as fixedOverride
       FROM transactions
       WHERE date >= ? AND date <= ?
       ORDER BY date, file_row_index
@@ -659,6 +666,10 @@ export class DB {
     replace(splits);
   }
 
+  setFixedOverride(id: string, override: 'unlink' | 'relink' | null): void {
+    this.db.prepare('UPDATE transactions SET fixed_override = ? WHERE id = ?').run(override, id);
+  }
+
   setExcluded(id: string, excluded: boolean, manual = false): void {
     if (manual) {
       const stmt = this.db.prepare(`
@@ -695,7 +706,8 @@ export class DB {
       fixedMissing: !!row.fixedMissing,
       fixedChanged: !!row.fixedChanged,
       excluded: !!row.excluded,
-      excludeOverride: row.excludeOverride || undefined
+      excludeOverride: row.excludeOverride || undefined,
+      fixedOverride: row.fixedOverride || undefined
     };
   }
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { writeFileSync, unlinkSync } from 'fs';
-import { applyFixedBills } from './fixed.js';
+import { applyFixedBills, unlinkFixedCharge, relinkFixedCharge } from './fixed.js';
 import { DB } from './db.js';
 import { Transaction } from './types.js';
 import { FixedBill } from './fixed-bills.js';
@@ -172,6 +172,36 @@ test('applyFixedBills uncovers a charge when coverAnyAmount is turned off', () =
     assert.strictEqual(bank?.coveredByFixedBill, null);
     assert.strictEqual(bank?.fixedChanged, true);
     assert.strictEqual(db.getMonthTotal('2024-10'), 60);
+  });
+});
+
+test('fixed unlink keeps a matching charge from covering a bill', () => {
+  withBills('./test-fixed-unlink.sqlite', [{
+    id: 'rent',
+    label: 'Rent',
+    category: 'Living/Rent',
+    monthlyAmount: 1000,
+    merchantPatterns: ['landlord']
+  }], db => {
+    db.insertTransaction(charge('bank1', 'Landlord Inc', 1000));
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getTransaction('bank1')?.coveredByFixedBill, 'Rent');
+    assert.strictEqual(db.getMonthTotal('2024-10'), 1000);
+
+    unlinkFixedCharge(db, 'bank1');
+    assert.strictEqual(db.getTransaction('bank1')?.fixedOverride, 'unlink');
+    assert.strictEqual(db.getTransaction('bank1')?.coveredByFixedBill, null);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 2000);
+
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getTransaction('bank1')?.coveredByFixedBill, null);
+    assert.strictEqual(db.getMonthTotal('2024-10'), 2000);
+
+    relinkFixedCharge(db, 'bank1');
+    applyFixedBills(db, '2024-10');
+    assert.strictEqual(db.getTransaction('bank1')?.fixedOverride, 'relink');
+    assert.strictEqual(db.getTransaction('bank1')?.coveredByFixedBill, 'Rent');
+    assert.strictEqual(db.getMonthTotal('2024-10'), 1000);
   });
 });
 
