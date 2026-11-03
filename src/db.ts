@@ -587,6 +587,20 @@ export class DB {
     stmt.run(id);
   }
 
+  clearFixedCoverage(id: string): void {
+    const stmt = this.db.prepare(`
+      UPDATE transactions
+      SET covered_by_fixed_bill = NULL,
+          fixed_changed = 0,
+          explanation = CASE
+            WHEN explanation LIKE 'paid via fixed bill:%' THEN NULL
+            ELSE explanation
+          END
+      WHERE id = ?
+    `);
+    stmt.run(id);
+  }
+
   setFixedReviewFlags(id: string, missing: boolean, changed: boolean): void {
     const stmt = this.db.prepare(`
       UPDATE transactions
