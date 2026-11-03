@@ -320,10 +320,13 @@ export class DB {
 
         const splits = this.getSplits(old.id);
         const feeCents = Math.round(fee.originalAmount * 100);
-        const feeSplitAt = splits.findIndex(s => Math.round(s.chfAmount * 100) === feeCents);
+        const feeSplitIdxs = splits
+          .map((part, i) => Math.round(part.chfAmount * 100) === feeCents ? i : -1)
+          .filter(i => i >= 0);
         let movedFeeCategory: string | undefined;
         let chargeSplits = splits;
-        if (feeSplitAt >= 0) {
+        if (feeSplitIdxs.length === 1) {
+          const feeSplitAt = feeSplitIdxs[0];
           movedFeeCategory = splits[feeSplitAt].category;
           chargeSplits = splits.filter((_, i) => i !== feeSplitAt);
         }
@@ -348,6 +351,7 @@ export class DB {
           }
         }
 
+        const category = fee.category || movedFeeCategory;
         this.insertTransaction({
           ...oldTx,
           id: fee.id,
@@ -358,7 +362,8 @@ export class DB {
           chfAmount: fee.chfAmount,
           fileRowIndex: fee.fileRowIndex,
           kind: 'expense',
-          category: fee.category || movedFeeCategory,
+          category,
+          reviewed: category ? !!oldTx.reviewed : false,
           coveredByFixedBill: undefined,
           fixedChanged: false,
           fixedMissing: false,
