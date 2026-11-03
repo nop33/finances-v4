@@ -7,6 +7,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
+const REVIEW_TOKEN = 'test-review-token';
+process.env.REVIEW_TOKEN = REVIEW_TOKEN;
+const AUTH_HEADERS = { cookie: `review_token=${REVIEW_TOKEN}` };
+
 test('WebServer: review queue in full mode includes all unreviewed', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
   const dbPath = join(tmpDir, 'test.db');
@@ -658,7 +662,7 @@ test('WebServer: malformed JSON in POST requests returns 400', () => {
     const acceptReq = {
       method: 'POST',
       url: '/api/accept',
-      headers: {},
+      headers: AUTH_HEADERS,
       on: (event: string, handler: Function) => {
         if (event === 'data') {
           handler('{invalid json}');
@@ -688,7 +692,7 @@ test('WebServer: malformed JSON in POST requests returns 400', () => {
     const correctReq = {
       method: 'POST',
       url: '/api/correct',
-      headers: {},
+      headers: AUTH_HEADERS,
       on: (event: string, handler: Function) => {
         if (event === 'data') {
           handler('not json at all');
@@ -751,7 +755,7 @@ test('WebServer: add twint transaction with valid data', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(reqData);
@@ -821,7 +825,7 @@ test('WebServer: add twint transaction validates required fields', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(JSON.stringify({ date: '2024-10-15', amount: 25.50 }));
@@ -853,7 +857,7 @@ test('WebServer: add twint transaction validates required fields', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(JSON.stringify({ date: '2024-10-15', merchant: 'Test', amount: -10 }));
@@ -885,7 +889,7 @@ test('WebServer: add twint transaction validates required fields', async () => {
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(JSON.stringify({ date: '15-10-2024', merchant: 'Test', amount: 10 }));
@@ -950,7 +954,7 @@ test('WebServer: twint transactions have unique IDs for same-day duplicates', as
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(reqData);
@@ -980,7 +984,7 @@ test('WebServer: twint transactions have unique IDs for same-day duplicates', as
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') {
             handler(reqData);
@@ -1060,7 +1064,7 @@ test('WebServer: delete twint transaction', () => {
     const req = {
       method: 'DELETE',
       url: '/api/twint/twi-test123',
-      headers: {}
+      headers: AUTH_HEADERS
     } as any;
 
     let statusCode = 0;
@@ -1124,7 +1128,7 @@ test('WebServer: cannot delete non-twint transaction', () => {
     const req = {
       method: 'DELETE',
       url: '/api/twint/bank-tx123',
-      headers: {}
+      headers: AUTH_HEADERS
     } as any;
 
     let statusCode = 0;
@@ -1214,7 +1218,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') handler(identicalData);
           else if (event === 'end') handler();
@@ -1241,7 +1245,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') handler(identicalData);
           else if (event === 'end') handler();
@@ -1269,7 +1273,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'DELETE',
         url: `/api/twint/${idA}`,
-        headers: {}
+        headers: AUTH_HEADERS
       } as any;
 
       const res = {
@@ -1290,7 +1294,7 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
       const req = {
         method: 'POST',
         url: '/api/twint',
-        headers: {},
+        headers: AUTH_HEADERS,
         on: (event: string, handler: Function) => {
           if (event === 'data') handler(identicalData);
           else if (event === 'end') handler();
@@ -1329,6 +1333,189 @@ test('WebServer: twint add/add/delete/add with identical data preserves all entr
     const allTransactions = db.getTransactionsByMonth('2024-10').filter(t => t.source === 'twint');
     assert.strictEqual(allTransactions.length, 2, 'Should have exactly 2 twint transactions (B and C)');
 
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+function testConfig() {
+  return JSON.stringify({
+    columns: [
+      { column: 'A', header: 'Year', role: 'year' },
+      { column: 'B', header: 'Month', role: 'month_date' },
+      { column: 'C', header: 'Food', group: 'Essentials', role: 'leaf_category' }
+    ],
+    tierGroups: { need: ['Essentials'] }
+  });
+}
+
+function mockRes(resolve: (value: { statusCode: number; responseBody: string; headers: Record<string, string> }) => void) {
+  let statusCode = 0;
+  let responseBody = '';
+  const headers: Record<string, string> = {};
+  return {
+    setHeader: (name: string, value: string) => { headers[name] = value; },
+    writeHead: (code: number, hdrs?: Record<string, string>) => {
+      statusCode = code;
+      if (hdrs) Object.assign(headers, hdrs);
+    },
+    end: (data?: string) => {
+      responseBody = data || '';
+      resolve({ statusCode, responseBody, headers });
+    }
+  } as any;
+}
+
+function request(server: WebServer, opts: { method?: string; url: string; body?: unknown; headers?: Record<string, string> }) {
+  return new Promise<{ statusCode: number; responseBody: string; headers: Record<string, string> }>((resolve) => {
+    const body = opts.body === undefined ? undefined : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body));
+    const req = {
+      method: opts.method || 'GET',
+      url: opts.url,
+      headers: opts.headers ?? AUTH_HEADERS,
+      on: (event: string, handler: Function) => {
+        if (event === 'data' && body !== undefined) handler(body);
+        if (event === 'end') handler();
+      }
+    } as any;
+    server.handleRequest(req, mockRes(resolve));
+  });
+}
+
+test('WebServer: API routes reject requests without the review token', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const noCookie = await request(server, { url: '/api/categories', headers: {} });
+    assert.strictEqual(noCookie.statusCode, 401);
+    assert.ok(noCookie.responseBody.includes('Unauthorized'));
+
+    const wrong = await request(server, { url: '/api/categories', headers: { cookie: 'review_token=wrong' } });
+    assert.strictEqual(wrong.statusCode, 401);
+
+    const ok = await request(server, { url: '/api/categories' });
+    assert.strictEqual(ok.statusCode, 200);
+
+    const page = await request(server, { url: '/review', headers: {} });
+    assert.strictEqual(page.statusCode, 200);
+    assert.ok(page.responseBody.includes('Access token'));
+    assert.ok(!page.responseBody.includes('btn-keep'));
+
+    const listing = await request(server, { url: '/data/', headers: {} });
+    assert.strictEqual(listing.statusCode, 404);
+    const listingAuthed = await request(server, { url: '/data/' });
+    assert.strictEqual(listingAuthed.statusCode, 404);
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: login sets a cookie that unlocks API routes', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+
+    const bad = await request(server, { method: 'POST', url: '/login', body: { token: 'nope' }, headers: {} });
+    assert.strictEqual(bad.statusCode, 401);
+
+    const login = await request(server, { method: 'POST', url: '/login', body: { token: REVIEW_TOKEN }, headers: {} });
+    assert.strictEqual(login.statusCode, 200);
+    assert.ok(login.headers['Set-Cookie']?.includes('review_token='));
+    assert.ok(login.headers['Set-Cookie']?.includes('HttpOnly'));
+
+    const authed = await request(server, {
+      method: 'POST',
+      url: '/api/review-queue',
+      body: { month: '2024-10', mode: 'full' },
+      headers: { cookie: `review_token=${REVIEW_TOKEN}` }
+    });
+    assert.strictEqual(authed.statusCode, 200);
+    assert.ok(Array.isArray(JSON.parse(authed.responseBody)));
+
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: review UI is mobile-first with keep/change/split/skip', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+    const html = (server as any).getReviewPageHTML();
+    assert.ok(html.includes('>Keep<'));
+    assert.ok(html.includes('>Change<'));
+    assert.ok(html.includes('>Split<'));
+    assert.ok(html.includes('>Skip<'));
+    assert.ok(html.includes('Search categories'));
+    assert.ok(html.includes('escapeHtml(tx.explanation)'));
+    const index = (server as any).getIndexPageHTML();
+    assert.ok(!index.includes('?month='));
+    assert.ok(index.includes('href="/review"'));
+    db.close();
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.CATEGORY_CONFIG;
+  }
+});
+
+test('WebServer: twint form accepts an optional category', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'finances-test-'));
+  const dbPath = join(tmpDir, 'test.db');
+  const configPath = join(tmpDir, 'config.json');
+  writeFileSync(configPath, testConfig());
+  process.env.CATEGORY_CONFIG = configPath;
+  try {
+    const db = new DB(dbPath);
+    const server = new WebServer(db);
+    const html = (server as any).getTwintPageHTML();
+    assert.ok(html.includes('Category (optional)'));
+    assert.ok(html.includes('id="date"'));
+    assert.ok(html.includes('id="merchant"'));
+    assert.ok(html.includes('id="amount"'));
+
+    const result = await request(server, {
+      method: 'POST',
+      url: '/api/twint',
+      body: { date: '2024-10-15', merchant: 'Kiosk', amount: 4.5, category: 'Essentials/Food' }
+    });
+    assert.strictEqual(result.statusCode, 200);
+    const id = JSON.parse(result.responseBody).id;
+    const tx = db.getTransaction(id);
+    assert.strictEqual(tx?.category, 'Essentials/Food');
+    assert.strictEqual(tx?.reviewed, true);
+    assert.strictEqual(tx?.chfAmount, 4.5);
+
+    const noCat = await request(server, {
+      method: 'POST',
+      url: '/api/twint',
+      body: { date: '2024-10-16', merchant: 'Bakery', amount: 3 }
+    });
+    assert.strictEqual(noCat.statusCode, 200);
+    const tx2 = db.getTransaction(JSON.parse(noCat.responseBody).id);
+    assert.ok(!tx2?.reviewed);
     db.close();
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });

@@ -43,7 +43,7 @@ function printUsage() {
   finances expences-row --month YYYY-MM --out file.json
                                                 Write one Expences sheet row as JSON
   finances summary --month YYYY-MM              Print a month summary
-  finances serve [--port 4321] [--host 127.0.0.1]  Start web review server
+  finances serve [--port 4321] [--host 127.0.0.1]  Start web review server (REVIEW_TOKEN required)
 `);
 }
 
