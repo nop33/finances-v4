@@ -59,6 +59,13 @@ export function applyFixedBills(db: DB, yearMonth: string): void {
     db.insertTransaction(syntheticTx);
     db.setFixedReviewFlags(syntheticTx.id, !!syntheticTx.fixedMissing, !!syntheticTx.fixedChanged);
   }
+
+  const keepIds = new Set(activeBills.map(bill => `fixed:${bill.id}:${yearMonth}`));
+  for (const tx of db.getTransactionsByMonth(yearMonth)) {
+    if (tx.source === 'fixed' && !keepIds.has(tx.id)) {
+      db.deleteTransaction(tx.id);
+    }
+  }
 }
 
 function pickCoverage(bill: FixedBill, allTransactions: Transaction[], yearMonth: string): {
